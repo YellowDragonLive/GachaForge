@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""配方 / 参数预设 / 抽卡会话服务。业务规则在这里，不接触 HTTP 对象。"""
+"""配方 / 参数预设 / 抽卡会话服务。业务规则在这里，不接触 HTTP 对象。
+
+v2：抽卡结果与会话快照写入关系表（draw_slots / draw_slot_tags /
+draw_profiles / session_loras / session_recipes），不再存重复 JSON。
+对外的 API 响应形状与 v1 保持一致，前端结果区与复现逻辑无需重写。
+"""
 from __future__ import annotations
 
 import copy
@@ -13,7 +18,9 @@ from sqlalchemy.orm import Session
 from ..core import recipes as recipe_core
 from ..core.pools import apply_filter_spec, build_prompt, draw_pull, pick_pools
 from ..errors import ConflictError, NotFoundError
-from ..models import Draw, DrawSession, GenProfile, Recipe
+from ..models import (Draw, DrawSession, DrawSlot, DrawSlotTag, GenProfile, Pool,
+                      Recipe, SessionLora, SessionProfile, SessionRecipe,
+                      SessionRecipeSlot)
 from . import pools as pool_svc
 
 
@@ -125,15 +132,129 @@ def resolve_profile(db: Session, profile_id: int | None) -> dict:
     return profile_out(row)
 
 
+# ---------------- 会话快照（关系表） ----------------
+
+def _write_profile_snapshot(db: Session, session_id: int, profile: dict,
+                            recipe_name: str = "", recipe_def: dict | None = None) -> None:
+    p = SessionProfile(
+        session_id=session_id, name=str(profile.get("name") or ""),
+        checkpoint=str(profile.get("checkpoint") or ""),
+        steps=int(profile.get("steps") or 20), cfg=float(profile.get("cfg") or 6.0),
+        sampler=str(profile.get("sampler") or ""),
+        scheduler=str(profile.get("scheduler") or ""),
+        width=int(profile.get("width") or 1024),
+        height=int(profile.get("height") or 1360),
+        negative=str(profile.get("negative") or ""),
+        workflow=str(profile.get("workflow") or "sdxl_minimal.json"),
+        seed_policy=str(profile.get("seed_policy") or "draw_seed"))
+    db.add(p)
+    db.flush()
+    for i, lora in enumerate(profile.get("loras") or []):
+        if isinstance(lora, dict):
+            db.add(SessionLora(profile_id=p.id, idx=i,
+                               name=str(lora.get("name") or ""),
+                               weight=float(lora.get("weight") or 1.0)))
+    definition = recipe_def or {}
+    r = SessionRecipe(session_id=session_id, name=recipe_name,
+                      fixed_head=str(definition.get("fixed_head") or ""),
+                      fixed_tail=str(definition.get("fixed_tail") or ""),
+                      template=str(definition.get("template") or ""))
+    db.add(r)
+    db.flush()
+    for i, slot in enumerate(definition.get("slots") or []):
+        if not isinstance(slot, dict):
+            continue
+        db.add(SessionRecipeSlot(
+            recipe_snapshot_id=r.id, idx=i, pool=str(slot.get("pool") or ""),
+            count=int(slot.get("count") or 1),
+            weight=float(slot.get("weight") or 1.0),
+            filter=str(slot.get("filter") or ""),
+            template=str(slot.get("template") or "")))
+
+
+def session_profile_dict(db: Session, session_id: int) -> dict:
+    """给生成 Worker 用：从关系表还原成 build_workflow 需要的字典。"""
+    p = db.scalar(select(SessionProfile).where(SessionProfile.session_id == session_id))
+    if p is None:
+        return dict(DEFAULT_PROFILE)
+    loras = db.scalars(select(SessionLora).where(SessionLora.profile_id == p.id)
+                       .order_by(SessionLora.idx)).all()
+    return {"name": p.name, "checkpoint": p.checkpoint,
+            "loras": [{"name": x.name, "weight": x.weight} for x in loras],
+            "steps": p.steps, "cfg": p.cfg, "sampler": p.sampler,
+            "scheduler": p.scheduler, "width": p.width, "height": p.height,
+            "negative": p.negative, "workflow": p.workflow}
+
+
+def session_recipe_dict(db: Session, session_id: int) -> dict:
+    r = db.scalar(select(SessionRecipe).where(SessionRecipe.session_id == session_id))
+    if r is None:
+        return {}
+    slots = db.scalars(select(SessionRecipeSlot)
+                       .where(SessionRecipeSlot.recipe_snapshot_id == r.id)
+                       .order_by(SessionRecipeSlot.idx)).all()
+    return {"name": r.name, "fixed_head": r.fixed_head,
+            "fixed_tail": r.fixed_tail, "template": r.template,
+            "slots": [{"pool": s.pool, "count": s.count, "weight": s.weight,
+                       "filter": s.filter, "template": s.template} for s in slots]}
+
+
+def _write_detail(db: Session, draw_id: int, detail: list[dict]) -> None:
+    for i, item in enumerate(detail or []):
+        if not isinstance(item, dict):
+            continue
+        slot = DrawSlot(draw_id=draw_id, idx=i,
+                        slot=str(item.get("slot") or item.get("friendly") or "条目"),
+                        pool=str(item.get("pool") or ""),
+                        label=str(item.get("label") or ""),
+                        empty=bool(item.get("empty")),
+                        reason=str(item.get("reason") or ""))
+        db.add(slot)
+        db.flush()
+        raw = item.get("tags")
+        tags = raw if isinstance(raw, list) else ([raw] if raw else [])
+        for j, tag in enumerate(tags):
+            if tag is None or str(tag) == "":
+                continue
+            db.add(DrawSlotTag(slot_id=slot.id, idx=j, tag=str(tag)))
+
+
+def detail_for_draws(db: Session, draw_ids: list[int]) -> dict[int, list[dict]]:
+    """一次查询组装 detail，避免 N+1；输出仍是 v1 的 {slot,pool,label,tags} 契约。"""
+    out: dict[int, list[dict]] = {int(i): [] for i in draw_ids}
+    if not draw_ids:
+        return out
+    slots = db.scalars(select(DrawSlot).where(DrawSlot.draw_id.in_(draw_ids))
+                       .order_by(DrawSlot.draw_id, DrawSlot.idx)).all()
+    by_slot: dict[int, list[str]] = {}
+    if slots:
+        ids = [s.id for s in slots]
+        for slot_id, tag in db.execute(
+                select(DrawSlotTag.slot_id, DrawSlotTag.tag)
+                .where(DrawSlotTag.slot_id.in_(ids))
+                .order_by(DrawSlotTag.slot_id, DrawSlotTag.idx)).all():
+            by_slot.setdefault(int(slot_id), []).append(str(tag))
+    for s in slots:
+        item = {"slot": s.slot, "pool": s.pool, "label": s.label,
+                "tags": by_slot.get(s.id, [])}
+        if s.empty:
+            item["empty"] = True
+            item["reason"] = s.reason
+        out.setdefault(int(s.draw_id), []).append(item)
+    return out
+
+
 # ---------------- 抽卡 ----------------
 
 def create_session(db: Session, params: dict) -> dict:
-    """一次抽卡 = 配方快照 + 参数快照 + N 条 Draw（可复现）。"""
+    """一次抽卡 = 关系化快照 + N 条 Draw（可复现）。"""
     recipe_def: dict = {}
+    recipe_name = ""
     recipe_id = params.get("recipe_id")
     if recipe_id:
         row = get_recipe(db, recipe_id)
         recipe_def = json.loads(row.definition_json or "{}")
+        recipe_name = row.name
         profile_id = params.get("gen_profile_id") or row.gen_profile_id
     else:
         recipe_def = params.get("definition") or {}
@@ -177,39 +298,37 @@ def create_session(db: Session, params: dict) -> dict:
                              used_hist, all_pools=all_pools)
             prompt = build_prompt(card)
             # 统一 detail 契约：无论是否用配方，每个槽位都是
-            # {slot, pool, label, tags: list[str]}。旧数据（tags 为字符串）
-            # 仍由前端 slotChips() 兼容，避免历史会话渲染失败。
+            # {slot, pool, label, tags: list[str]}。
+            # 全池随机时 PoolItem.tags 常为空，真正抽到的是 label；
+            # 写进 tags 才能让结果区 chip 与关系表概念索引都拿到内容。
             detail = [
                 {"slot": it.get("friendly") or it.get("pool") or "条目",
                  "pool": it.get("pool") or "",
                  "label": it.get("label") or "",
-                 "tags": [str(it["tags"])] if it.get("tags") else []}
+                 "tags": ([str(it["tags"])] if it.get("tags")
+                          else ([str(it["label"])] if it.get("label") else []))}
                 for it in card
             ]
         cards.append({"idx": i + 1,
                       "seed": (int(seed) + i) if seed is not None else None,
                       "prompt": prompt, "negative": negative, "detail": detail})
 
-    session = DrawSession(
-        recipe_id=recipe_id,
-        recipe_snapshot_json=_dump(recipe_def),
-        profile_snapshot_json=_dump(profile),
-        seed=seed, pulls=pulls, count=count,
-        workflow_version=profile.get("workflow", "sdxl_minimal.json"))
+    session = DrawSession(recipe_id=recipe_id, seed=seed, pulls=pulls, count=count,
+                          workflow_version=profile.get("workflow", "sdxl_minimal.json"))
     db.add(session)
     db.flush()
+    _write_profile_snapshot(db, session.id, profile, recipe_name, recipe_def)
     rows = []
     for c in cards:
         row = Draw(session_id=session.id, idx=c["idx"], seed=c["seed"],
-                   prompt=c["prompt"], negative=c["negative"],
-                   detail_json=_dump(c["detail"]))
+                   prompt=c["prompt"], negative=c["negative"])
         db.add(row)
         db.flush()
+        _write_detail(db, row.id, c["detail"])
         rows.append({"id": row.id, **c})
     db.commit()
 
-    # 裸关键字会作用于全部卡池，配方槽位因此静默变空是本次用户故障的根因。
-    # 这里把「为什么少了槽位」显式回给前端，而不是让用户自己猜。
+    # 裸关键字会作用于全部卡池，配方槽位因此静默变空是历史故障的根因。
     empty_slots = sorted({str(x["slot"]) for c in cards
                           for x in c["detail"] if x.get("empty")})
     bare_kws = [p.strip() for p in filter_spec.split(",")
@@ -237,9 +356,12 @@ def get_session(db: Session, session_id: int) -> dict:
     s = db.get(DrawSession, session_id)
     if not s:
         raise NotFoundError(f"抽卡会话不存在: id={session_id}")
+    r = session_recipe_dict(db, session_id)
+    # v1 的 recipe_snapshot 不含 name 字段，组装时去掉，保持响应兼容
+    recipe_snapshot = {k: v for k, v in r.items() if k != "name"}
     return {"id": s.id, "recipe_id": s.recipe_id,
-            "recipe_snapshot": json.loads(s.recipe_snapshot_json or "{}"),
-            "profile_snapshot": json.loads(s.profile_snapshot_json or "{}"),
+            "recipe_snapshot": recipe_snapshot,
+            "profile_snapshot": session_profile_dict(db, session_id),
             "seed": s.seed, "pulls": s.pulls, "count": s.count,
             "workflow_version": s.workflow_version,
             "created_at": s.created_at.isoformat(timespec="seconds")}
@@ -251,9 +373,10 @@ def list_draws(db: Session, *, session_id: int | None = None,
     if session_id:
         stmt = stmt.where(Draw.session_id == session_id).order_by(Draw.idx)
     rows = db.scalars(stmt).all()
+    details = detail_for_draws(db, [d.id for d in rows])
     return [{"id": d.id, "session_id": d.session_id, "idx": d.idx, "seed": d.seed,
              "prompt": d.prompt, "negative": d.negative,
-             "detail": json.loads(d.detail_json or "[]")} for d in rows]
+             "detail": details.get(d.id, [])} for d in rows]
 
 
 def preview_recipe(db: Session, definition: dict, *, pulls: int = 3,

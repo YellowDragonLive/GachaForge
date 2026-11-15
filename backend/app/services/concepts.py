@@ -1,31 +1,30 @@
 # -*- coding: utf-8 -*-
-"""通用概念缩略图层：把数据库里「概念 → 它生成的真实图」反查成可点选卡片。
+"""概念物化索引（v2）：由关系表增量维护，不再每次扫描全库、不再解析 JSON。
 
-抽象概念（画师 / tag / 动作 / 角色 / 底模 / LoRA / 配方）文字说不清，
-但抽卡数据库本身已经把每次抽到的概念和它产出的图一起存下来了：
-  draws.prompt / detail_json            抽到的概念
-  draw_sessions.profile_snapshot_json  底模 / LoRA
-  generation_jobs → images.thumb_path  该次抽卡真实产出的缩略图
-因此切词即得到「概念 → 代表图」倒排索引：不复制图片、不新增服务、
-不依赖任何 AI 库，也不写数据库。抽得越多，每个概念的样图越贴合本机口味。
+单一事实源：
+  draw_slots / draw_slot_tags   抽到的概念（结构化槽位，粒度准确）
+  draw_profiles / session_loras / session_recipes   底模 / LoRA / 配方
+  image_assets                  图片归属与原始 prompt
+  images                        评分 / 收藏 / 归档状态
 
-池类别直接读 pools.kind，不手写映射表：新增任何类别的抽象概念都自动带上
-正确的过滤池，避免退化成「全局裸关键字」把其它槽位筛空。
+出图落库时 index_image() 增量写入 concepts + concept_images；评分收藏变化后
+refresh_covers() 只重算受影响概念的封面；rebuild() 可随时从关系表全量重建。
+
+对外只给「一张封面」和「详情页按需分页的图」，卡片列表本身不返回任何图片。
 """
 from __future__ import annotations
 
-import json
+import datetime as dt
 import re
-import time
 from collections import defaultdict
-from dataclasses import dataclass
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import Draw, DrawSession, GenerationJob, Image as ImageRow, Pool, Recipe
+from ..models import (Concept, ConceptImage, DrawSlot, DrawSlotTag, Image as ImageRow,
+                      ImageAsset, Pool, SessionLora, SessionProfile, SessionRecipe)
 
-# 通用质量词 / 人数词：频次极高，但没有「看一眼就知道是什么」的信息量
+# 通用质量词 / 人数词：出现频率极高，但没有「看一眼就知道是什么」的信息量
 STOP = frozenset({
     "masterpiece", "best quality", "high quality", "normal quality",
     "low quality", "worst quality", "best aesthetics", "amazing quality",
@@ -38,44 +37,27 @@ STOP = frozenset({
     "masterpiece best quality", "best quality masterpiece",
 })
 BAD_FRAGMENT = ("masterpiece", "best quality", "worst quality")
-
-# 只有历史遗留的英文槽位名需要别名，中文类别直接用数据库里的 pools.kind
 ALIAS = {"artist": "画师", "artists": "画师", "gallery:artists": "画师",
          "action": "动作", "character": "角色", "characters": "角色",
          "zh_tw": "角色"}
 INFO_KINDS = frozenset({"底模", "LoRA", "配方"})
-
-# prompt 里 "1girl asuna (sao)" 这类人数前缀没有判断价值，剥掉留下真概念
 _HEAD = re.compile(
     r"^(?:(?:1girl|2girls|3girls|1boy|2boys|1man|1woman|solo|a couple"
     r"|multiple girls|multiple boys)\s+)+", re.I)
 
-
-@dataclass
-class _Row:
-    image_id: int
-    rating: int
-    favorite: bool
-    prompt: str
-    detail: list
-    profile: dict
-    recipe: str
-    hay: str
-
-
-_CACHE: dict = {"sig": None, "at": 0.0, "rows": None, "index": None}
-_TTL = 20.0
+THUMB_URL = "/api/images/{id}/thumb"
+FILE_URL = "/api/images/{id}/file"
 
 
 def _clean(s) -> str:
-    """归一化：去 danbooru 转义反斜杠、压缩空白、小写。用于去重与匹配。"""
+    """归一化：去 danbooru 转义反斜杠、压缩空白、小写，用于概念 key 去重。"""
     return re.sub(r"\s+", " ", str(s or "").replace("\\", "").strip().lower())
 
 
 def _valid(key: str) -> bool:
-    if not key or key in STOP or len(key) < 3 or len(key) > 44:
+    if not key or key in STOP or len(key) < 3 or len(key) > 160:
         return False
-    if key.isdigit() or len(key.split()) > 6:
+    if key.isdigit() or len(key.split()) > 8:
         return False
     if any(f in key for f in BAD_FRAGMENT):
         return False
@@ -84,8 +66,8 @@ def _valid(key: str) -> bool:
     return True
 
 
-def _split(raw) -> list[str]:
-    """把一段 prompt / 槽位 tags 切成候选概念，保留原始大小写用于显示。"""
+def _split(raw) -> list[tuple[str, str]]:
+    """把一段槽位 tag 切成 (归一化 key, 展示名)，保留原始大小写用于显示。"""
     out = []
     for part in re.split(r"[,，\n]", str(raw or "")):
         disp = re.sub(r"\s+", " ", str(part).replace("\\", "").strip())
@@ -96,171 +78,228 @@ def _split(raw) -> list[str]:
     return out
 
 
-def _json(raw, fallback):
-    try:
-        val = json.loads(raw or "")
-        return val if isinstance(val, type(fallback)) else fallback
-    except (ValueError, TypeError):
-        return fallback
+def _score(row: ImageRow) -> float:
+    """封面排序分：人工评分 / 收藏是最终信号，新鲜度只做微弱加成。"""
+    created = row.created_at or dt.datetime.now()
+    age_days = max(0.0, (dt.datetime.now() - created).total_seconds() / 86400.0)
+    fresh = max(0.0, 1.0 - age_days / 30.0) * 0.5
+    return float((row.rating or 0) * 2 + (5 if row.favorite else 0) + fresh)
 
 
-def _signature(db: Session) -> tuple:
-    """评分 / 收藏 / 新图都会改变签名，实现写后立即失效；TTL 只是兜底。"""
-    row = db.execute(text(
-        "select (select count(*) from images),"
-        " (select coalesce(max(id),0) from images),"
-        " (select coalesce(sum(rating),0) from images),"
-        " (select coalesce(sum(favorite),0) from images),"
-        " (select count(*) from draws),"
-        " (select count(*) from pools)")).one()
-    return tuple(int(x or 0) for x in row)
+def _upsert(concepts: dict, key: str, disp: str, kind: str, pool: str,
+            filterable: bool) -> None:
+    cur = concepts.get(key)
+    if cur is None:
+        concepts[key] = {"key": key, "label": disp, "kind": kind,
+                         "pool": pool, "filterable": filterable}
+        return
+    # 具体类别 > 泛化 tag；可点选 > 仅展示的信息卡片
+    if (filterable and not cur["filterable"]) or (
+            filterable == cur["filterable"]
+            and kind != "tag" and cur["kind"] == "tag"):
+        cur.update({"kind": kind, "pool": pool, "filterable": filterable,
+                    "label": disp})
 
 
-def _load_rows(db: Session) -> list[_Row]:
-    stmt = (select(ImageRow.id, ImageRow.rating, ImageRow.favorite,
-                   Draw.prompt, Draw.detail_json,
-                   DrawSession.profile_snapshot_json, Recipe.name)
-            .join(GenerationJob, GenerationJob.id == ImageRow.job_id)
-            .join(Draw, Draw.id == GenerationJob.draw_id)
-            .join(DrawSession, DrawSession.id == Draw.session_id)
-            .outerjoin(Recipe, Recipe.id == DrawSession.recipe_id)
-            .order_by(ImageRow.id.desc()))
-    rows = []
-    for r in db.execute(stmt).all():
-        detail = _json(r[4], [])
-        profile = _json(r[5], {})
-        prompt = str(r[3] or "")
-        rows.append(_Row(
-            image_id=int(r[0]), rating=int(r[1] or 0), favorite=bool(r[2]),
-            prompt=prompt, detail=detail if isinstance(detail, list) else [],
-            profile=profile if isinstance(profile, dict) else {},
-            recipe=str(r[6] or ""),
-            hay=_clean(prompt + " " + str(r[4] or "") + " " + str(r[5] or "")),
-        ))
-    return rows
-
-
-def _index(db: Session):
-    sig = _signature(db)
-    now = time.monotonic()
-    if (_CACHE["index"] is not None and _CACHE["sig"] == sig
-            and now - _CACHE["at"] < _TTL):
-        return _CACHE["rows"], _CACHE["index"]
-    rows = _load_rows(db)
+def concept_keys_for_image(db: Session, image_id: int) -> list[dict]:
+    """从关系表抽出这张图对应的全部概念；不解析任何 JSON、不切整段 prompt。"""
+    asset = db.scalar(select(ImageAsset).where(ImageAsset.image_id == image_id))
     kinds = {str(k) for k in db.execute(select(Pool.kind)).scalars() if k}
-    idx: dict[str, dict] = {}
+    found: dict[str, dict] = {}
 
-    def add(key: str, disp: str, kind: str, pool: str,
-            filterable: bool, row: _Row) -> None:
-        cur = idx.get(key)
-        if cur is None:
-            cur = idx[key] = {"key": key, "label": disp, "kind": kind,
-                              "pool": pool, "filterable": filterable,
-                              "draws": 0, "images": {}}
-        elif (filterable and not cur["filterable"]) or (
-                filterable == cur["filterable"]
-                and kind != "tag" and cur["kind"] == "tag"):
-            # 具体类别 > 泛化 tag；可过滤 > 仅展示的信息卡片
-            cur["kind"], cur["pool"], cur["filterable"] = kind, pool, filterable
-        cur["draws"] += 1
-        cur["images"][row.image_id] = row
-
-    for row in rows:
-        # 1) prompt 切词 —— 最终送给 ComfyUI 的完整字符串，概念一定在里面
-        for key, disp in _split(row.prompt):
-            add(key, disp, "tag", "", True, row)
-        # 2) detail 槽位 —— 中文槽位名就是 pools.kind，过滤能精确命中
-        for slot in row.detail:
-            if not isinstance(slot, dict):
-                continue
-            raw = str(slot.get("slot") or slot.get("friendly") or "").strip()
-            if not raw or raw in ("fixed_head", "fixed_tail", "template"):
+    if asset and asset.draw_id:
+        slots = db.scalars(select(DrawSlot).where(DrawSlot.draw_id == asset.draw_id)
+                           .order_by(DrawSlot.idx)).all()
+        for slot in slots:
+            raw = str(slot.slot or "").strip()
+            # 模板固定段不是「抽到的概念」，不能进索引，更不能变成裸关键字过滤
+            if raw.lower() in ("fixed_head", "fixed_tail", "template") or slot.empty:
                 continue
             kind = ALIAS.get(raw.lower()) or (raw if raw in kinds else "")
             pool = kind if kind in kinds else ""
-            tags = slot.get("tags") or []
-            if isinstance(tags, str):
-                tags = [tags]
-            for t in tags:
-                for key, disp in _split(t):
-                    add(key, disp, kind or "tag", pool, True, row)
-        # 3) 出图预设 —— 底模 / LoRA / 配方不是池过滤能表达的，只做信息卡片
-        cp = str(row.profile.get("checkpoint") or "").strip()
-        if cp:
-            add(_clean(cp), cp, "底模", "", False, row)
-        for lora in (row.profile.get("loras") or []):
-            name = str((lora or {}).get("name") or "").strip() if isinstance(lora, dict) else ""
-            if name:
-                add(_clean(name), name, "LoRA", "", False, row)
-        if row.recipe:
-            add(_clean(row.recipe), row.recipe, "配方", "", False, row)
-    _CACHE.update({"sig": sig, "at": now, "rows": rows, "index": idx})
-    return rows, idx
+            tags = db.scalars(select(DrawSlotTag.tag)
+                              .where(DrawSlotTag.slot_id == slot.id)
+                              .order_by(DrawSlotTag.idx)).all()
+            for tag in tags:
+                for key, disp in _split(tag):
+                    _upsert(found, key, disp, kind or "tag", pool, True)
+            label = str(slot.label or "").strip()
+            if label and label not in {str(t) for t in tags}:
+                for key, disp in _split(label):
+                    _upsert(found, key, disp, kind or "tag", pool, True)
+
+    if asset and asset.session_id:
+        profile = db.scalar(select(SessionProfile)
+                            .where(SessionProfile.session_id == asset.session_id))
+        if profile:
+            cp = str(profile.checkpoint or "").strip()
+            if cp:
+                _upsert(found, _clean(cp), cp, "底模", "", False)
+            loras = db.scalars(select(SessionLora)
+                               .where(SessionLora.profile_id == profile.id)
+                               .order_by(SessionLora.idx)).all()
+            for lora in loras:
+                name = str(lora.name or "").strip()
+                if name:
+                    _upsert(found, _clean(name), name, "LoRA", "", False)
+        recipe = db.scalar(select(SessionRecipe)
+                           .where(SessionRecipe.session_id == asset.session_id))
+        if recipe and recipe.name:
+            _upsert(found, _clean(recipe.name), recipe.name, "配方", "", False)
+
+    return [v for k, v in found.items() if _valid(k)]
 
 
-def _thumbs(entry: dict | None, limit: int) -> list[dict]:
-    if not entry:
-        return []
-    rows = sorted(entry["images"].values(),
-                  key=lambda r: (r.favorite, r.rating, r.image_id), reverse=True)
-    return [{"id": r.image_id, "url": f"/api/images/{r.image_id}/thumb",
-             "rating": r.rating, "favorite": r.favorite}
-            for r in rows[:max(1, min(12, limit))]]
+def _concept_row(db: Session, key: str) -> Concept | None:
+    norm = _clean(key)
+    row = db.scalar(select(Concept).where(Concept.key == norm))
+    if row:
+        return row
+    if not norm:
+        return None
+    cand = db.scalars(select(Concept).where(Concept.key.like(norm + "%"))
+                      .order_by(Concept.image_count.desc()).limit(1)).first()
+    return cand
 
 
-def _card(key: str, entry: dict, thumbs: int) -> dict:
-    thumbs_list = _thumbs(entry, thumbs)
+def _recount(db: Session, concept: Concept) -> None:
+    sub = select(func.count()).select_from(ConceptImage).where(
+        ConceptImage.concept_id == concept.id)
+    concept.image_count = int(db.scalar(sub) or 0)
+    draws = db.scalar(select(func.count(func.distinct(ConceptImage.draw_id)))
+                      .where(ConceptImage.concept_id == concept.id)) or 0
+    concept.draw_count = int(draws)
+    best = db.scalar(select(ConceptImage.image_id)
+                     .where(ConceptImage.concept_id == concept.id)
+                     .order_by(ConceptImage.score.desc(),
+                               ConceptImage.image_id.desc()).limit(1))
+    concept.cover_image_id = int(best) if best else None
+
+
+def index_image(db: Session, image_id: int) -> int:
+    """出图落库时增量写入概念索引；失败由调用方决定降级，绝不拖垮出图。"""
+    image = db.get(ImageRow, image_id)
+    if image is None or image.status != "active":
+        return 0
+    asset = db.scalar(select(ImageAsset).where(ImageAsset.image_id == image_id))
+    keys = concept_keys_for_image(db, image_id)
+    stamp = image.created_at or dt.datetime.now()
+    for item in keys:
+        concept = db.scalar(select(Concept).where(Concept.key == item["key"]))
+        if concept is None:
+            concept = Concept(key=item["key"], label=item["label"],
+                              kind=item["kind"], pool=item["pool"],
+                              filterable=item["filterable"],
+                              first_seen_at=stamp)
+            db.add(concept)
+            db.flush()
+        link = db.scalar(select(ConceptImage).where(
+            ConceptImage.concept_id == concept.id,
+            ConceptImage.image_id == image.id))
+        if link is None:
+            db.add(ConceptImage(concept_id=concept.id, image_id=image.id,
+                                draw_id=asset.draw_id if asset else None,
+                                score=_score(image), created_at=stamp))
+        else:
+            link.score = _score(image)
+            link.draw_id = asset.draw_id if asset else None
+        concept.last_seen_at = stamp
+        db.flush()
+        _recount(db, concept)
+    db.flush()
+    return len(keys)
+
+
+def refresh_covers(db: Session, image_id: int) -> int:
+    """评分 / 收藏变化后，只重算这张图涉及的概念封面。"""
+    image = db.get(ImageRow, image_id)
+    if image is None:
+        return 0
+    links = db.scalars(select(ConceptImage)
+                       .where(ConceptImage.image_id == image_id)).all()
+    for link in links:
+        link.score = _score(image)
+    affected = {link.concept_id for link in links}
+    for cid in affected:
+        concept = db.get(Concept, cid)
+        if concept:
+            _recount(db, concept)
+    db.flush()
+    return len(affected)
+
+
+def rebuild(db: Session) -> dict:
+    """全量重建：清空物化表后按关系表逐图重建（幂等，可随时执行）。"""
+    db.query(ConceptImage).delete()
+    db.query(Concept).delete()
+    db.flush()
+    ids = db.scalars(select(ImageRow.id).where(ImageRow.status == "active")
+                     .order_by(ImageRow.id)).all()
+    linked = 0
+    for iid in ids:
+        linked += index_image(db, int(iid))
+    db.commit()
+    return {"images": len(ids), "links": linked,
+            "concepts": int(db.scalar(select(func.count()).select_from(Concept)) or 0)}
+
+
+def _image_brief(db: Session, image_id: int) -> dict | None:
+    row = db.get(ImageRow, image_id)
+    if row is None:
+        return None
+    asset = db.scalar(select(ImageAsset).where(ImageAsset.image_id == image_id))
     return {
-        "key": entry["key"], "label": entry["label"], "kind": entry["kind"],
-        "pool": entry["pool"], "filterable": entry["filterable"],
-        "draw_count": entry["draws"], "image_count": len(entry["images"]),
-        "thumbs": thumbs_list,
-        "thumb_url": (thumbs_list or [{}])[0].get("url"),
+        "id": row.id,
+        "url": THUMB_URL.format(id=row.id),
+        "original_url": FILE_URL.format(id=row.id),
+        "rating": row.rating or 0, "favorite": bool(row.favorite),
+        "prompt": asset.prompt if asset else "",
+        "width": row.width, "height": row.height,
+        "created_at": row.created_at.isoformat(timespec="seconds")
+        if row.created_at else "",
     }
 
 
-def _kinds(idx: dict) -> list[dict]:
-    counts = defaultdict(int)
-    for e in idx.values():
-        counts[e["kind"]] += 1
-    return [{"kind": k, "count": n}
-            for k, n in sorted(counts.items(), key=lambda x: -x[1])]
+def _kinds(db: Session) -> list[dict]:
+    rows = db.execute(select(Concept.kind, func.count())
+                      .group_by(Concept.kind)
+                      .order_by(func.count().desc())).all()
+    return [{"kind": str(k), "count": int(n)} for k, n in rows]
 
 
 def status(db: Session) -> dict:
-    rows, idx = _index(db)
-    return {"ready": bool(rows), "image_count": len(rows),
-            "concept_count": len(idx), "kinds": _kinds(idx),
-            "source": "draws + generation_jobs + images"}
+    images = int(db.scalar(select(func.count()).select_from(ImageRow)
+                           .where(ImageRow.status == "active")) or 0)
+    return {"ready": images > 0, "image_count": images,
+            "concept_count": int(db.scalar(select(func.count())
+                                           .select_from(Concept)) or 0),
+            "kinds": _kinds(db),
+            "source": "draw_slots + draw_profiles + image_assets (v2 relational)"}
 
 
 def wall(db: Session, *, limit: int = 12, kind: str = "", q: str = "",
-         thumbs: int = 3, include_info: bool = False) -> dict:
-    """概念墙：按「有真实代表图的数量」排序，可按类别 / 关键字筛选。
-
-    默认只给可点选的概念卡片；底模 / LoRA / 配方是信息类，需按类别切换查看，
-    避免占满首屏却不产生任何过滤效果。
-    """
-    rows, idx = _index(db)
-    needle = _clean(q)
+         include_info: bool = False) -> dict:
+    """概念墙：只返回文字与计数，按类别轮转；图片由 /cover 按需悬浮加载。"""
+    stmt = select(Concept)
     show_info = include_info or kind in INFO_KINDS
-    needles = [e for e in idx.values()
-               if (not kind or e["kind"] == kind)
-               and (show_info or e["filterable"])
-               and (not needle or needle in e["key"] or needle in _clean(e["label"]))]
-    # 具体类别优先，其次代表图多的：让「一眼能判断」的概念排在通用词前面
-    needles.sort(key=lambda e: (e["kind"] != "tag", len(e["images"]),
-                                e["draws"]), reverse=True)
+    if not show_info:
+        stmt = stmt.where(Concept.filterable.is_(True))
+    if kind:
+        stmt = stmt.where(Concept.kind == kind)
+    needle = _clean(q)
+    all_rows = db.scalars(stmt).all()
+    rows = [r for r in all_rows
+            if not needle or needle in r.key or needle in _clean(r.label)]
+    rows.sort(key=lambda r: (r.kind != "tag", r.image_count, r.draw_count),
+              reverse=True)
     cap = max(1, min(60, limit))
     if kind:
-        picked = needles[:cap]
+        picked = rows[:cap]
     else:
-        # 跨类别轮转：不让单一类别（例如动作词条）占满首屏，
-        # 让画师 / 角色 / 服装 / 背景 / 风格等不同抽象领域都露出样图。
         groups = defaultdict(list)
-        for e in needles:
-            groups[e["kind"]].append(e)
-        ordered = sorted(groups, key=lambda k: -len(groups[k][0]["images"]))
+        for r in rows:
+            groups[r.kind].append(r)
+        ordered = sorted(groups, key=lambda k: -groups[k][0].image_count)
         picked = []
         for i in range(max((len(g) for g in groups.values()), default=0)):
             for k in ordered:
@@ -268,28 +307,66 @@ def wall(db: Session, *, limit: int = 12, kind: str = "", q: str = "",
                     picked.append(groups[k][i])
             if len(picked) >= cap:
                 break
-    return {"total": len(needles), "image_count": len(rows),
-            "kinds": _kinds(idx),
-            "items": [_card(e["key"], e, thumbs) for e in picked]}
+    items = [{"key": r.key, "label": r.label, "kind": r.kind, "pool": r.pool,
+              "filterable": bool(r.filterable), "image_count": r.image_count,
+              "draw_count": r.draw_count, "cover_image_id": r.cover_image_id,
+              "has_cover": bool(r.cover_image_id)} for r in picked]
+    return {"total": len(rows),
+            "image_count": int(db.scalar(select(func.count()).select_from(ImageRow)
+                                         .where(ImageRow.status == "active")) or 0),
+            "kinds": _kinds(db), "items": items}
 
 
-def thumbs_for(db: Session, key: str, limit: int = 4) -> dict:
-    """单个概念的代表图；语义检索结果用它补上「我用它出过的图」。"""
-    _, idx = _index(db)
-    norm = _clean(key)
-    entry = idx.get(norm)
-    if entry is None and norm:
-        cand = [e for k, e in idx.items() if k.startswith(norm) or norm.startswith(k)]
-        entry = max(cand, key=lambda e: len(e["images"])) if cand else None
-    return {"key": key, "found": entry is not None,
-            "image_count": len(entry["images"]) if entry else 0,
-            "draw_count": entry["draws"] if entry else 0,
-            "thumbs": _thumbs(entry, limit)}
+def cover(db: Session, key: str) -> dict:
+    """单张代表图：卡片 hover / focus 时才调用，结果由前端按 key 缓存。"""
+    concept = _concept_row(db, key)
+    if concept is None:
+        return {"key": key, "found": False, "image_count": 0, "draw_count": 0,
+                "image": None}
+    iid = concept.cover_image_id
+    if not iid:
+        iid = db.scalar(select(ConceptImage.image_id)
+                        .where(ConceptImage.concept_id == concept.id)
+                        .order_by(ConceptImage.score.desc(),
+                                  ConceptImage.image_id.desc()).limit(1))
+    return {"key": concept.key, "found": True,
+            "kind": concept.kind, "pool": concept.pool,
+            "image_count": concept.image_count, "draw_count": concept.draw_count,
+            "image": _image_brief(db, int(iid)) if iid else None}
 
 
-def thumbs_batch(db: Session, keys: list[str], limit: int = 3) -> dict:
-    out = []
-    for k in keys[:40]:
-        if str(k or "").strip():
-            out.append(thumbs_for(db, str(k), limit))
-    return {"items": out}
+def images_for(db: Session, key: str, *, limit: int = 50,
+               offset: int = 0) -> dict:
+    """概念详情页：按封面分排序，首屏最多 50 张，更多靠 offset 滚动加载。"""
+    concept = _concept_row(db, key)
+    if concept is None:
+        return {"key": key, "found": False, "total": 0, "limit": limit,
+                "offset": offset, "items": []}
+    cap = max(1, min(50, limit))
+    total = int(db.scalar(select(func.count()).select_from(ConceptImage)
+                          .where(ConceptImage.concept_id == concept.id)) or 0)
+    ids = db.scalars(select(ConceptImage.image_id)
+                     .where(ConceptImage.concept_id == concept.id)
+                     .order_by(ConceptImage.score.desc(),
+                               ConceptImage.image_id.desc())
+                     .limit(cap).offset(max(0, offset))).all()
+    items = [x for x in (_image_brief(db, int(i)) for i in ids) if x]
+    return {"key": concept.key, "label": concept.label, "kind": concept.kind,
+            "pool": concept.pool, "found": True, "total": total,
+            "limit": cap, "offset": max(0, offset), "items": items}
+
+
+def thumbs_for(db: Session, key: str, limit: int = 1) -> dict:
+    """兼容旧调用（语义检索取「我用它出过几张图」）：最多返回一张封面。"""
+    c = cover(db, key)
+    return {"key": c["key"], "found": c["found"],
+            "image_count": c["image_count"], "draw_count": c["draw_count"],
+            "thumbs": ([{"id": c["image"]["id"], "url": c["image"]["url"],
+                         "rating": c["image"]["rating"],
+                         "favorite": c["image"]["favorite"]}]
+                       if c["image"] else [])}
+
+
+def thumbs_batch(db: Session, keys: list[str], limit: int = 1) -> dict:
+    return {"items": [thumbs_for(db, str(k), limit)
+                      for k in keys[:40] if str(k or "").strip()]}

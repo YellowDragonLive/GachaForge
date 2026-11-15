@@ -27,20 +27,19 @@ def status():
 @router.get("/suggest")
 def suggest(q: str = "", top_k: int = Query(12, ge=1, le=30),
             db: Session = Depends(get_db)):
-    """一句话画风 → 带样图的画师卡片；q 为空时给精选/核心/收藏。
+    """一句话画风 → 画师候选；q 为空时给精选/核心/收藏。
 
-    每位画师再补一组「我用它真实出过的图」：抽象概念既能看外部风格锚点，
-    也能看自己数据库里的实际效果，两者叠加由眼睛做最终判断。
+    卡片只保留一个外部风格锚点 URL（hover 才加载），「我用它出过的图」
+    只给数量，详情由前端按需走 /api/concepts/cover 与 /api/concepts/images。
     """
     try:
         data = semantics.suggest(q, top_k=top_k)
     except semantics.SemanticsUnavailable as exc:
         raise _unavailable(exc) from exc
     for item in data.get("items", []):
-        hist = concepts.thumbs_for(db, str(item.get("name") or ""), limit=3)
+        hist = concepts.thumbs_for(db, str(item.get("name") or ""), limit=1)
         item["history"] = {"image_count": hist["image_count"],
-                           "draw_count": hist["draw_count"],
-                           "thumbs": hist["thumbs"]}
+                           "draw_count": hist["draw_count"]}
     return ok(data)
 
 

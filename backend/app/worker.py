@@ -18,6 +18,7 @@ from .config import get_settings
 from .db import SessionLocal
 from .logging import emit
 from .models import Draw, EventLog, GenerationJob
+from .services import draws as draw_svc
 from .services import generation as job_svc
 from .services import images as image_svc
 from .services.comfy import CancelledError, ComfyClient, ComfyError
@@ -124,9 +125,7 @@ class GenerationWorker(threading.Thread):
             draw = db.get(Draw, row.draw_id)
             if draw is None:
                 raise ComfyError("关联的抽卡结果已不存在")
-            from .models import DrawSession
-            session = db.get(DrawSession, draw.session_id)
-            profile = json.loads(session.profile_snapshot_json or "{}") if session else {}
+            profile = draw_svc.session_profile_dict(db, draw.session_id)
             seed = draw.seed if draw.seed is not None else (row.id * 7919)
             prefix = f"gacha_s{draw.session_id}_d{draw.id}"
 

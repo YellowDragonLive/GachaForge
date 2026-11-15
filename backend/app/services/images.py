@@ -1,19 +1,23 @@
 # -*- coding: utf-8 -*-
-"""图片资产：落盘、缩略图、画廊查询、外部图鉴目录注册、元数据导出。"""
+"""图片资产：落盘、缩略图、画廊查询、外部图鉴目录注册、元数据导出。
+
+v2：业务元数据写入 image_assets 关系表，不再塞 images.meta_json；
+出图落库同时增量维护概念索引；评分 / 收藏变化后重算受影响概念的封面。
+"""
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import datetime
 from pathlib import Path
 
 from PIL import Image
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from ..config import get_settings
 from ..errors import NotFoundError
-from ..models import Draw, DrawSession, GenerationJob, Image as ImageRow
+from ..models import Draw, GenerationJob, Image as ImageRow, ImageAsset
+from . import concepts as concept_svc
 
 IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 THUMB_MAX = 360
@@ -40,7 +44,6 @@ def save_result(db: Session, job: GenerationJob, data: bytes,
     """把 ComfyUI 返回的图片字节写入 data/outputs/ 并注册到 images 表。"""
     s = get_settings()
     draw = db.get(Draw, job.draw_id)
-    session = db.get(DrawSession, draw.session_id) if draw else None
     day = datetime.now().strftime("%Y%m%d")
     outdir = s.outputs_dir / day / f"session_{draw.session_id if draw else 0}"
     outdir.mkdir(parents=True, exist_ok=True)
@@ -55,27 +58,52 @@ def save_result(db: Session, job: GenerationJob, data: bytes,
     except Exception:
         width, height, thumb_str = 0, 0, ""
     row = ImageRow(
-        job_id=job.id, origin="generated", file_path=str(fpath),
+        job_id=job.id, origin="generated", status="active", file_path=str(fpath),
         thumb_path=thumb_str, width=width, height=height,
-        file_size=len(data), sha256=digest,
-        meta_json=json.dumps({
-            "job_id": job.id, "draw_id": draw.id if draw else None,
-            "session_id": session.id if session else None,
-            "prompt": draw.prompt if draw else "", "seed": draw.seed if draw else None,
-            "comfy_prompt_id": job.comfy_prompt_id,
-        }, ensure_ascii=False))
+        file_size=len(data), sha256=digest)
     db.add(row)
     db.flush()
+    db.add(ImageAsset(
+        image_id=row.id, job_id=job.id,
+        draw_id=draw.id if draw else None,
+        session_id=draw.session_id if draw else None,
+        prompt=draw.prompt if draw else "", seed=draw.seed if draw else None,
+        comfy_prompt_id=job.comfy_prompt_id, source=str(fpath), name=fname))
+    db.flush()
+    try:
+        concept_svc.index_image(db, row.id)
+    except Exception as exc:  # 概念索引是增强能力，绝不拖垮出图主流程
+        from ..logging import emit
+        emit("WARNING", "concepts", f"图 {row.id} 概念索引写入失败: {exc}")
     return image_out(row)
 
 
 def image_out(row: ImageRow) -> dict:
+    asset = _asset(row)
+    meta = {"job_id": row.job_id,
+            "draw_id": asset.draw_id if asset else None,
+            "session_id": asset.session_id if asset else None,
+            "prompt": asset.prompt if asset else "",
+            "seed": asset.seed if asset else None,
+            "comfy_prompt_id": asset.comfy_prompt_id if asset else ""}
+    if asset and asset.source:
+        meta["source"] = asset.source
+        meta["name"] = asset.name
     return {"id": row.id, "job_id": row.job_id, "origin": row.origin,
+            "status": row.status,
             "width": row.width, "height": row.height, "file_size": row.file_size,
             "sha256": row.sha256, "rating": row.rating,
             "favorite": row.favorite, "note": row.note,
             "created_at": row.created_at.isoformat(timespec="seconds"),
-            "meta": json.loads(row.meta_json or "{}")}
+            "meta": meta}
+
+
+def _asset(row: ImageRow) -> ImageAsset | None:
+    """从 ORM 对象所属的 session 里取关系化的业务元数据。"""
+    db = object_session(row)
+    if db is None or row.id is None:
+        return None
+    return db.scalar(select(ImageAsset).where(ImageAsset.image_id == row.id))
 
 
 def list_images(db: Session, *, favorite: bool | None = None,
@@ -89,7 +117,9 @@ def list_images(db: Session, *, favorite: bool | None = None,
     if origin:
         stmt = stmt.where(ImageRow.origin == origin)
     if q:
-        stmt = stmt.where(ImageRow.meta_json.like(f"%{q}%"))
+        ids = db.scalars(select(ImageAsset.image_id).where(
+            ImageAsset.prompt.like(f"%{q}%") | ImageAsset.name.like(f"%{q}%"))).all()
+        stmt = stmt.where(ImageRow.id.in_(list(ids) or [-1]))
     total = len(db.scalars(stmt).all())
     rows = db.scalars(stmt.limit(min(300, limit)).offset(offset)).all()
     return {"total": total, "items": [image_out(r) for r in rows]}
@@ -107,6 +137,12 @@ def patch_image(db: Session, image_id: int, data: dict) -> dict:
     for key in ("rating", "favorite", "note"):
         if data.get(key) is not None:
             setattr(row, key, data[key])
+    db.flush()
+    try:
+        concept_svc.refresh_covers(db, image_id)
+    except Exception as exc:  # 封面重算失败不影响评分/收藏本身
+        from ..logging import emit
+        emit("WARNING", "concepts", f"图 {image_id} 封面重算失败: {exc}")
     db.commit()
     return image_out(row)
 
@@ -138,11 +174,12 @@ def register_dir(db: Session, raw_path: str, *, limit: int = 2000) -> dict:
             thumb_str = str(tpath)
         except Exception:
             width, height, digest, thumb_str = 0, 0, "", ""
-        db.add(ImageRow(origin="gallery", file_path=sp, thumb_path=thumb_str,
-                        width=width, height=height, file_size=fp.stat().st_size,
-                        sha256=digest,
-                        meta_json=json.dumps({"source": sp, "name": fp.name},
-                                             ensure_ascii=False)))
+        row = ImageRow(origin="gallery", status="active", file_path=sp,
+                       thumb_path=thumb_str, width=width, height=height,
+                       file_size=fp.stat().st_size, sha256=digest)
+        db.add(row)
+        db.flush()
+        db.add(ImageAsset(image_id=row.id, source=sp, name=fp.name))
         added += 1
     db.commit()
     return {"dir": str(p), "added": added}
