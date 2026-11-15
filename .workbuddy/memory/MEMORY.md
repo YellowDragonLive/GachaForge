@@ -5,6 +5,7 @@
 - **缩略图是通用呈现层，主数据源是抽卡数据库自己**（用户 2026-11-15：「缩略图可以推广到其它抽象领域，抽卡的时候已经有数据库了」）。v2 关系链：`draw_slots/draw_slot_tags → image_assets → images.thumb_path`，加上 `draw_profiles/session_loras` 里的 checkpoint/LoRA；物化到 `concepts/concept_images`。每次抽卡把「概念 + 它生成的真实图」存全，任何概念都能反查代表图，随使用自生长。外部 1025 张画师风格样图只作冷启动补充，不搬 3.2GB 原图、不常驻服务。`images.rating` / `favorite` 决定封面分（`rating×2 + favorite×5 + 新鲜度`），是最终人工信号。
 - 凡是后端能枚举的值一律点选（下拉 / chip），不让用户手写表达式或 JSON；手写只作为 `<details>` 高级逃生口。自然语言描述（如「想要的感觉」）是 AI 交互入口，不在此限，但要给预设 chip 减少打字。
 - 过滤类功能必须让「被过滤掉的东西」可见（warnings + 空槽位标记），否则用户只能看到结果莫名变少。
+- **UI/UE 必须从「用户使用路径」倒推，目标是路径最短**（用户 2026-11-16 批评上版左右分栏「没考虑 UE」：「应该把用户的使用路径考虑进去，然后调整 ui，使得用户使用路径最小」，并要求先列路径再设计）。判据是完成一件事的**步数与跨页跳转次数**，不是版式好不好看。页面按任务组织、不按功能组织；反馈内联、跳页归零；低频配置就地化。现有 6 个平级 tab（按功能切）导致核心 P0「抽卡→看到图」要 10 步 / 3 次跳页（`submitJobs()` 强制 `#jobs` 是最大断点）；目标 3 步 / 0 跳。**特别注意：一次只调版式不算 UE 优化**，把过滤控件与概念探索放到对角反而拉长了 P4 路径。
 
 ## 架构
 - 前端零框架、零构建（原生 ESM，`widgets.js` 零 import 纯函数层）；后端 FastAPI + SQLite；一条 `scripts/start.bat` 起全套，不新增常驻服务。
@@ -18,4 +19,5 @@
 - 代码改动落盘即 `git commit`，中文提交信息（改了什么 / 为什么改 / 怎么验证）；多个独立改动拆多个 commit。
 - 高频操作先写 `scripts/` 脚本 + `docs/运维_*.md` 手册，手册是唯一口径，流程变了改手册和脚本。
 - 冒烟测试必须用 `%TEMP%` 临时库副本隔离，绝不污染正式库；验证数据按 id 精确清理。
+- **部分更新接口是整体覆盖语义，必须带回原字段**：`upsert_recipe` 里 `row.gen_profile_id = data.get("gen_profile_id")`、`upsert_profile` 里 `row.loras_json = _dump(data.get("loras", []))`，只传改动字段会把配方关联的预设 / 用户 LoRA 清空。凡「就地改配方 / 就地调参」都要带 `gen_profile_id`、`loras`、`workflow`（2026-11-16 实测）。
 - **同一台机器有多个 Python，启动脚本不能假设 PATH 里那个装了依赖**（2026-11-15 双击实测踩坑）：双击 bat 走系统 PATH 的 `X:\ProgramData\miniconda3\python.exe` 3.13.13（只有 httpx），终端走 WorkBuddy 自带 `C:\Users\13410\.workbuddy\binaries\python\versions\3.13.12\python.exe` 3.13.14（核心依赖都在这）。`start.bat` 按 `GACHA_PYTHON` → 项目 `.venv` → PATH `python` → WorkBuddy 版本目录的顺序探测「能 import 七个核心模块」的解释器，存 `%PY%` 全程复用并打印。不要给 miniconda 装依赖、不要自动 pip。验证双击场景要用「PATH 只含 miniconda」的临时 bat 干跑，别靠终端环境想当然。
