@@ -19,8 +19,9 @@ from sqlalchemy.orm import Session
 from ..core import recipes as recipe_core
 from ..core.pools import apply_filter_spec, build_prompt, draw_pull, pick_pools
 from ..errors import ConflictError, NotFoundError
-from ..models import (Draw, DrawSession, DrawSlot, DrawSlotTag, GenProfile, Pool,
-                      Recipe, SessionLora, SessionProfile, SessionRecipe,
+from ..models import (Draw, DrawSession, DrawSlot, DrawSlotTag, GenProfile,
+                      GenerationJob, Image, ImageAsset, Pool, Recipe,
+                      SessionLora, SessionProfile, SessionRecipe,
                       SessionRecipeSlot)
 from . import pools as pool_svc
 
@@ -434,6 +435,49 @@ def list_draws(db: Session, *, session_id: int | None = None,
     return [{"id": d.id, "session_id": d.session_id, "idx": d.idx, "seed": d.seed,
              "prompt": d.prompt, "negative": d.negative,
              "detail": details.get(d.id, [])} for d in rows]
+
+
+def draw_states(db: Session, draw_ids: list[int]) -> list[dict]:
+    """按 draw_id 批量取「最新任务 + 已出图片」，供结果卡片内联状态与缩略图。
+
+    抽 3~8 张时前端只打一个请求，而不是每张卡各查任务和图片两个接口。
+    一个 draw 可能被重跑多次：任务取最新一条，图片按时间倒序全部带回（前端取首张当封面）。
+    """
+    ids: list[int] = []
+    for raw in draw_ids[:200]:
+        try:
+            did = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if did > 0 and did not in ids:
+            ids.append(did)
+    if not ids:
+        return []
+
+    from .generation import job_out   # generation 反向依赖本模块，延迟导入避免循环
+
+    jobs = db.scalars(
+        select(GenerationJob).where(GenerationJob.draw_id.in_(ids))
+        .order_by(GenerationJob.id.desc())).all()
+    latest: dict[int, GenerationJob] = {}
+    for job in jobs:
+        latest.setdefault(job.draw_id, job)
+
+    rows = db.execute(
+        select(Image, ImageAsset)
+        .join(ImageAsset, ImageAsset.image_id == Image.id)
+        .where(ImageAsset.draw_id.in_(ids), Image.status == "active")
+        .order_by(Image.id.desc())).all()
+    images: dict[int, list[dict]] = {}
+    for img, asset in rows:
+        images.setdefault(asset.draw_id, []).append({
+            "id": img.id, "width": img.width, "height": img.height,
+            "rating": img.rating, "favorite": bool(img.favorite),
+        })
+
+    return [{"draw_id": did,
+             "job": job_out(latest[did]) if did in latest else None,
+             "images": images.get(did, [])} for did in ids]
 
 
 def preview_recipe(db: Session, definition: dict, *, pulls: int = 3,

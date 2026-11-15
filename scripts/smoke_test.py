@@ -300,6 +300,22 @@ def main() -> int:
               f"progress={final.get('progress')}")
         j2 = c.post("/api/jobs", json={"draw_ids": [did]}).json()["data"]
         check("重复提交幂等", not j2["created"] and job_id in j2["reused"])
+
+        print("-- 结果卡内联状态 --")
+        st = c.get(f"/api/draws/status?draw_ids={did}").json()["data"]
+        check("按 draw 批量返回状态", len(st) == 1 and st[0]["draw_id"] == did,
+              f"{len(st)} 条")
+        check("状态带最新任务与已出图",
+              (st[0].get("job") or {}).get("status") == "succeeded"
+              and len(st[0]["images"]) >= 1,
+              f"job={(st[0].get('job') or {}).get('status')} "
+              f"imgs={len(st[0]['images'])}")
+        empty = c.get("/api/draws/status?draw_ids=").json()["data"]
+        dirty = c.get("/api/draws/status?draw_ids=abc,-1,999999").json()["data"]
+        check("非法 id 容错不报错",
+              empty == [] and len(dirty) == 1 and dirty[0]["job"] is None,
+              f"empty={empty} dirty={len(dirty)} 条")
+
         retried = c.post(f"/api/jobs/{job_id}/retry", json={})
         check("重试点可用", retried.status_code == 200)
         cancelled = c.post(f"/api/jobs/{job_id}/cancel", json={})

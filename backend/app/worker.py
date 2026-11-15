@@ -105,7 +105,8 @@ class GenerationWorker(threading.Thread):
                                                  "progress": row.progress},
                                                 ensure_ascii=False)))
         db.commit()
-        bus.publish({"type": "job", "job_id": row.id, "status": status,
+        bus.publish({"type": "job", "job_id": row.id, "draw_id": row.draw_id,
+                     "status": status,
                      "progress": row.progress, "step": row.step,
                      "steps_total": row.steps_total,
                      "retry_count": row.retry_count,
@@ -145,6 +146,7 @@ class GenerationWorker(threading.Thread):
                 row.step, row.steps_total, row.progress = step, total, min(99, pct)
                 db.commit()
                 bus.publish({"type": "progress", "job_id": job_id,
+                             "draw_id": row.draw_id,
                              "status": "running", "progress": row.progress,
                              "step": step, "steps_total": total, "phase": phase,
                              "retry_count": row.retry_count, "error": ""})
@@ -162,7 +164,8 @@ class GenerationWorker(threading.Thread):
                 image_ids.append(img["id"])
             db.commit()
             self._set(db, row, "succeeded", progress=100)
-            bus.publish({"type": "job", "job_id": job_id, "status": "succeeded",
+            bus.publish({"type": "job", "job_id": job_id, "draw_id": row.draw_id,
+                         "status": "succeeded",
                          "progress": 100, "step": row.steps_total,
                          "steps_total": row.steps_total, "image_ids": image_ids,
                          "retry_count": row.retry_count, "error": ""})

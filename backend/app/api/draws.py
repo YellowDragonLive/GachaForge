@@ -27,3 +27,10 @@ def get_session(session_id: int, db: Session = Depends(get_db)):
 def list_draws(session_id: int | None = None,
                limit: int = Query(200, le=500), db: Session = Depends(get_db)):
     return ok(svc.list_draws(db, session_id=session_id, limit=limit))
+
+
+@router.get("/draws/status")
+def draw_states(draw_ids: str = Query("", description="逗号分隔的 draw id"),
+                db: Session = Depends(get_db)):
+    """结果卡片内联状态：一次拿回每抽的最新任务与已出图片。"""
+    return ok(svc.draw_states(db, [x for x in draw_ids.split(",") if x.strip()]))
