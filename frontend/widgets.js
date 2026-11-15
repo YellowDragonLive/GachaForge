@@ -42,6 +42,28 @@ export function removeFilter(spec, index) {
   return rows.map((r) => r.raw).join(', ');
 }
 
+/**
+ * 找出「已点选、但当前配方没有对应槽位」的过滤条件。
+ * 后端会自动补一个槽位把 tag 写进 prompt；前端提前说明，不用等抽完才发现。
+ * recipe 形状：{definition:{slots:[{pool}]}}；pools：[{name, kind}]。
+ * 类别名（如「画师」）与具体池名（如「zh_TW」）统一折算成 kind 再比较。
+ */
+export function missingFilterSlots(spec, recipe, pools) {
+  const rows = parseFilterSpec(spec).filter((r) => r.pool);
+  const def = recipe && recipe.definition;
+  if (!rows.length || !def) return [];
+  const kindOf = (key) => {
+    const k = String(key || '').trim();
+    if (!k) return '';
+    const hit = (pools || []).find((p) => p.name === k);
+    return (hit && hit.kind) ? hit.kind : k;
+  };
+  const covered = new Set(
+    (Array.isArray(def.slots) ? def.slots : [])
+      .map((s) => kindOf(s.pool).toLowerCase()).filter(Boolean));
+  return rows.filter((r) => !covered.has(kindOf(r.pool).toLowerCase()));
+}
+
 /** 已选条件，每条带一个删除按钮。裸关键字单独标黄提示是全局过滤。 */
 export function filterChipsHtml(spec) {
   const rows = parseFilterSpec(spec);

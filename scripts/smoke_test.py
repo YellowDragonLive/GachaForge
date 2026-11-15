@@ -264,6 +264,33 @@ def main() -> int:
               and not any("覆盖" in w for w in r2["warnings"]),
               f"角色抽到 {'/'.join(role2['tags'])[:50]}")
 
+        # 点选的 `池:tag` 在配方里没有对应槽位时，原本会被静默忽略：
+        # 画师池被筛过了，但配方根本不抽画师，prompt 里一个画师 tag 都没有。
+        no_artist = {"fixed_head": "masterpiece, best quality", "template": "",
+                     "fixed_tail": "",
+                     "slots": [{"pool": "角色", "count": 1, "weight": 1,
+                                "filter": ""}]}
+        pinned = c.post("/api/draw-sessions", json={
+            "definition": no_artist, "filter": "画师:bowalia",
+            "pulls": 1, "seed": 5}).json()["data"]
+        pin_detail = pinned["draws"][0]["detail"]
+        check("无对应槽位的点选条件自动补入 prompt",
+              "bowalia" in pinned["draws"][0]["prompt"].lower()
+              and any(x["slot"] == "画师" and x.get("tags") for x in pin_detail)
+              and any("自动补入" in w for w in pinned["warnings"]),
+              f"prompt={pinned['draws'][0]['prompt'][:60]} / "
+              f"{len(pinned['warnings'])} 条告警")
+        has_artist = json.loads(json.dumps(no_artist))
+        has_artist["slots"].insert(0, {"pool": "画师", "count": 1,
+                                       "weight": 1, "filter": ""})
+        dup = c.post("/api/draw-sessions", json={
+            "definition": has_artist, "filter": "画师:bowalia",
+            "pulls": 1, "seed": 5}).json()["data"]
+        check("配方已有对应槽位时不重复补",
+              "bowalia" in dup["draws"][0]["prompt"].lower()
+              and not any("自动补入" in w for w in dup["warnings"]),
+              f"{len(dup['warnings'])} 条告警")
+
         print("-- 任务与幂等 --")
         did = s2["draws"][0]["id"]
         j1 = c.post("/api/jobs", json={"draw_ids": [did]}).json()["data"]

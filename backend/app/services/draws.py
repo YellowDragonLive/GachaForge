@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import json
 import random
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -246,6 +247,51 @@ def detail_for_draws(db: Session, draw_ids: list[int]) -> dict[int, list[dict]]:
 
 # ---------------- 抽卡 ----------------
 
+def _auto_slots_for_filter(recipe_def: dict, filter_spec: str,
+                           all_pools: list) -> tuple[list[str], dict]:
+    """给「点选了但配方没有对应槽位」的 `池:tag` 条件补一个槽位。
+
+    filter_spec 原本只用于筛池（apply_filter_spec）：配方不抽这个池时，
+    条件等于白选——用户点「画师:bowalia」，画师池被筛过了，但配方槽位里
+    根本没有画师，prompt 里一个画师 tag 都不会出现，也没有任何提示。
+
+    这里为这类条件补一个一次性槽位（count=1、filter=tag），让所选 tag
+    真正写进 prompt。改的是本次执行用的副本，并会如实写进会话快照，
+    所以同 seed 复现结果一致；数据库里的配方本身不动。
+    """
+    if not recipe_def or not filter_spec:
+        return [], recipe_def
+    out = copy.deepcopy(recipe_def)
+    slots = list(out.get("slots") or [])
+    # 只用池名比对，避免 friendly 默认值「条目」把不相干的池误判成已覆盖
+    covered: set[str] = set()
+    for slot in slots:
+        key = str(slot.get("pool") or "").strip()
+        if key:
+            covered.update(p.name for p in recipe_core.resolve_pools(key, all_pools))
+    added: list[str] = []
+    for part in str(filter_spec).split(","):
+        part = part.strip()
+        if ":" not in part and "：" not in part:
+            continue          # 裸关键字是全局筛选，不补槽位
+        pk, val = re.split(r"[:：]", part, maxsplit=1)
+        pk, val = pk.strip(), val.strip()
+        if not pk or not val:
+            continue
+        targets = recipe_core.resolve_pools(pk, all_pools)
+        if not targets:
+            continue          # 池不存在：保持原有筛选语义，由告警说明
+        names = {p.name for p in targets}
+        if names & covered:
+            continue          # 配方已有对应槽位，原有筛选语义即可生效
+        slots.append({"pool": pk, "count": 1, "weight": 1.0, "filter": val})
+        covered.update(names)
+        added.append(f"{pk}:{val}")
+    if added:
+        out["slots"] = slots
+    return added, out
+
+
 def create_session(db: Session, params: dict) -> dict:
     """一次抽卡 = 关系化快照 + N 条 Draw（可复现）。"""
     recipe_def: dict = {}
@@ -281,6 +327,12 @@ def create_session(db: Session, params: dict) -> dict:
     if not selected:
         raise ConflictError("过滤后没有任何可用条目")
     removed_pools = len(raw_selected) - len(selected)
+
+    # 点选的 `池:tag` 在配方里没有对应槽位时，自动补一个，别让条件白选。
+    auto_slots: list[str] = []
+    if recipe_def and filter_spec:
+        auto_slots, recipe_def = _auto_slots_for_filter(
+            recipe_def, filter_spec, all_pools)
 
     seed = params.get("seed")
     pulls = int(params.get("pulls", 3))
@@ -343,6 +395,11 @@ def create_session(db: Session, params: dict) -> dict:
         warnings.append(
             f"表单过滤 '{filter_spec}' 本次优先，已临时覆盖配方槽位自带的 filter"
             f"（{'、'.join(overridden_filters)}）；想按槽位 filter 抽请把表单留空。")
+    if auto_slots:
+        warnings.append(
+            f"「{'、'.join(auto_slots)}」在当前配方里没有对应槽位；"
+            f"已自动补入 {len(auto_slots)} 个槽位，所选 tag 会写进 prompt。"
+            "想固定下来可在「配方编辑器」里给配方加上这些槽位。")
     if empty_slots:
         warnings.append("本次没有抽到内容的槽位：" + "、".join(empty_slots) +
                         "（原因见卡片里的 ⚠ 标记）")
