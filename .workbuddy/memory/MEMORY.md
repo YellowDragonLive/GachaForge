@@ -1,8 +1,8 @@
 # 项目长期约定 · 抽卡工作台（X:/image）
 
 ## 交互 / UI
-- **抽象概念优先用缩略图呈现，不要只给文字标签**（用户 2026-11-15 明确提出：「缩略图能帮人类快速判断抽象概念」）。这条是通用的，不限于画风：画师、风格 tag、动作、角色、LoRA、底模、配方、语义命中的「感觉」凡是文字说不清理不清的，都要用样图让人一眼判断。语义检索结果必须是带样图的卡片，而不是文字 chip 列表。缩略图同时是更快的选择控件，不只是装饰。
-- **缩略图是通用呈现层，不是某个外部数据源**（用户 2026-11-15 补充：「缩略图可以推广到其它抽象领域，抽卡的时候已经有数据库了」）。主数据源是抽卡数据库自己：`draws.detail_json → generation_jobs → images.thumb_path`，加上 `draw_sessions.profile_snapshot_json` 里的 checkpoint/LoRA。每次抽卡已经把「概念 + 它生成的真实图」存全，任何概念都能反查到代表图，且随使用自生长、越贴合本机口味；外部 1025 张画师风格样图只作冷启动补充，不搬 3.2GB 原图、不常驻服务。`images.rating` / `favorite` 是代表图优选与后续偏好加权的最终人工信号。
+- **抽象概念优先用缩略图呈现，但必须按需悬浮**（用户 2026-11-15：「缩略图能帮人类快速判断抽象概念」；后续修正：「缩略图应该是按需悬浮而不是全部打印出来」「每个概念其实只要一个缩略图，点击概念进入一个页面看到全部曾经出过的图片(limit50)」）。列表页默认零 `<img>`，hover / focus 才浮出**一张**代表图；点概念名进详情页看最多 50 张。语义卡、概念墙、结果槽位 chip 全走同一套按需机制。缩略图同时是更快的选择控件，不只是装饰。
+- **缩略图是通用呈现层，主数据源是抽卡数据库自己**（用户 2026-11-15：「缩略图可以推广到其它抽象领域，抽卡的时候已经有数据库了」）。v2 关系链：`draw_slots/draw_slot_tags → image_assets → images.thumb_path`，加上 `draw_profiles/session_loras` 里的 checkpoint/LoRA；物化到 `concepts/concept_images`。每次抽卡把「概念 + 它生成的真实图」存全，任何概念都能反查代表图，随使用自生长。外部 1025 张画师风格样图只作冷启动补充，不搬 3.2GB 原图、不常驻服务。`images.rating` / `favorite` 决定封面分（`rating×2 + favorite×5 + 新鲜度`），是最终人工信号。
 - 凡是后端能枚举的值一律点选（下拉 / chip），不让用户手写表达式或 JSON；手写只作为 `<details>` 高级逃生口。自然语言描述（如「想要的感觉」）是 AI 交互入口，不在此限，但要给预设 chip 减少打字。
 - 过滤类功能必须让「被过滤掉的东西」可见（warnings + 空槽位标记），否则用户只能看到结果莫名变少。
 
@@ -10,6 +10,8 @@
 - 前端零框架、零构建（原生 ESM，`widgets.js` 零 import 纯函数层）；后端 FastAPI + SQLite；一条 `scripts/start.bat` 起全套，不新增常驻服务。
 - 本地 AI 能力优先：能用本机已有权重/节点就不联网、不装云端 SDK、不要 API key。ComfyUI `:8188` 是现成的本地推理后端。
 - 语义抽卡采用「构建期离线预算向量 + 运行期只做 numpy 余弦」：索引存 `data/semantics/`，可重建、不入库；模型权重存 `data/models/`，两者都不进 git。运行时缺依赖要优雅降级，不能拖垮其他功能。
+- **v2 彻底规范化是单一事实源**（用户 2026-11-15 选方案 C）：`draw_slots/draw_slot_tags`、`draw_profiles/session_loras/session_recipes`、`image_assets`、`concepts/concept_images` 取代 `detail_json/meta_json/*_snapshot_json`。Alembic 基线 `0001_v2_relational` 重做，旧库只读归档不提供升级路径。对外 API 响应形状保持 v1 兼容（降低回归面）。概念粒度取结构化槽位 tag，不再切整段 prompt；出图落库增量维护索引，`rebuild_concepts.py` 可全量重建。
+- **清空重建固定走 `scripts/reset_db.py`**：先 `--dry-run` 看清单；备份 → 旧库与 162 个图片文件**移动**到 `data/archive/<时间戳>/`（不物理删、可回滚）→ 新库重建字典 → **回迁用户配置**（checkpoint/LoRA/自建配方按名字）。清库不删配置是硬要求，否则真实模式 checkpoint 为空会出图失败。
 - **依赖也不重新下载**（用户 2026-11-15 明确：「你别重新下载依赖，你直接剪切到这个文件夹就行」）。本机已有的 Python 包 / 模型权重一律直接搬进项目：`scripts/vendor_deps.py` 从本机 `.venv` 的 site-packages 搬到 `vendor/pydeps/`（需 Python ABI 一致，本机都是 3.13/cp313），`embed.prepare_model()` 把 Chroma 缓存的 ONNX 权重**剪切**进 `data/models/minilm/`（不复制两份）。不 `pip install`、不改 requirements 触发下载、`start.bat` 缺依赖只提示手动装一次。模型与包都不进 git、可重建。
 
 ## 工程
