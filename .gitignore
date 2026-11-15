@@ -25,6 +25,7 @@ data/*.db
 data/*.db-*
 data/outputs/
 data/thumbs/
+data/backups/
 logs/
 *.log
 *.bak
