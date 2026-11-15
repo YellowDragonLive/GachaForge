@@ -1,0 +1,37 @@
+# Python temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# User output images
+outputs/
+
+# Task runner scripts
+_run_*.py
+
+# Credentials and secrets
+.env
+secrets.json
+*.pem
+*.key
+
+# ---- 抽卡工作台（新系统） ----
+# 运行时数据库与产物
+data/*.db
+data/*.db-*
+data/outputs/
+data/thumbs/
+logs/
+*.log
+*.bak
+
+# 克隆的第三方词卡库
+vendor/
+
+# 虚拟环境
+.venv/
+venv/
