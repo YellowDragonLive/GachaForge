@@ -3,25 +3,92 @@
 
 默认强制 mock 模式，不依赖 ComfyUI 在线。覆盖编译、健康检查、抽卡复现、
 旧算法一致性、任务状态机、幂等、图片落盘/缩略图/标注/导出、静态前端与错误结构。
+
+重要：全程跑在 %TEMP% 的临时库副本上，不写正式库、不污染画廊。
+配置必须在 import backend.app.main 之前设好，因为 db.py 模块级就会创建 engine。
 """
 from __future__ import annotations
 
 import json
 import os
 import random
+import shutil
+import sqlite3
+import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-os.environ.setdefault("GACHA_COMFY_MOCK", "1")
+
+from backend.app.config import load_dotenv  # noqa: E402
+
+load_dotenv()
+
+# ---- 隔离：临时库副本 + 临时图片目录 ----
+SMOKE_DIR = Path(tempfile.mkdtemp(prefix="gacha_smoke_"))
+SMOKE_DB = SMOKE_DIR / "gacha.db"
+_src = Path(os.environ.get("GACHA_DB_PATH", "data/gacha.db"))
+if not _src.is_absolute():
+    _src = ROOT / _src
+
+if _src.is_file():
+    # SQLite backup API：即使正式库正在 WAL 模式被服务占用，也能拿到一致快照。
+    # 注意 sqlite3 的 with 只提交事务、不 close()，必须显式关闭，
+    # 否则 Windows 上句柄不释放，cleanup() 删不掉临时目录。
+    _con, _out = sqlite3.connect(_src), sqlite3.connect(SMOKE_DB)
+    try:
+        _con.backup(_out)
+    finally:
+        _con.close()
+        _out.close()
+    # 只复用卡池/配方/预设等基础数据；运行时记录一律不带进副本，
+    # 否则「有图片记录但文件已被删」会让原图接口检查假失败
+    _c = sqlite3.connect(SMOKE_DB)
+    try:
+        for _table in ("images", "generation_jobs", "draws", "draw_sessions"):
+            _c.execute(f"DELETE FROM {_table}")
+        _c.commit()
+    finally:
+        _c.close()
+else:
+    # 正式库还不存在（全新 clone）：临时库自建表并导入旧数据
+    _env = os.environ.copy()
+    _env.update({
+        "GACHA_DB_PATH": str(SMOKE_DB),
+        "GACHA_OUTPUTS_DIR": str(SMOKE_DIR / "outputs"),
+        "GACHA_THUMBS_DIR": str(SMOKE_DIR / "thumbs"),
+        "GACHA_COMFY_MOCK": "1",
+    })
+    for _script, _args in (("scripts/init_db.py", []),
+                           ("scripts/migrate_legacy.py", ["--if-empty"])):
+        subprocess.run([sys.executable, _script, *_args], cwd=ROOT,
+                       env=_env, check=True)
+
+os.environ.update({
+    "GACHA_COMFY_MOCK": "1",
+    "GACHA_DB_PATH": str(SMOKE_DB),
+    "GACHA_OUTPUTS_DIR": str(SMOKE_DIR / "outputs"),
+    "GACHA_THUMBS_DIR": str(SMOKE_DIR / "thumbs"),
+})
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.app.main import app  # noqa: E402
 
 RESULTS: list[tuple[str, bool, str]] = []
+
+
+def cleanup() -> None:
+    """释放 SQLite 句柄后删除临时目录，否则 Windows 上文件被占用删不掉。"""
+    try:
+        from backend.app.db import engine
+        engine.dispose()
+    except Exception:
+        pass
+    shutil.rmtree(SMOKE_DIR, ignore_errors=True)
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:
@@ -131,4 +198,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        _rc = main()
+    finally:
+        cleanup()
+    raise SystemExit(_rc)
