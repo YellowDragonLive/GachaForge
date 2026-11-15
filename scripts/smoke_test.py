@@ -299,6 +299,73 @@ def main() -> int:
         check("tag 候选端点已注册",
               "/api/pools/tag-suggest" in spec.get("paths", {}))
 
+        print("-- 通用概念缩略图（数据库驱动） --")
+        cst = c.get("/api/concepts/status")
+        check("概念索引状态", cst.status_code == 200 and cst.json()["ok"],
+              f"{cst.json().get('data', {}).get('concept_count', 0)} 个概念")
+        wj = c.get("/api/concepts/wall", params={"limit": 8, "thumbs": 2}).json()
+        wd = wj.get("data", {})
+        check("概念墙返回带缩略图的卡片",
+              wj.get("ok") is True and len(wd.get("items", [])) >= 1,
+              f"{wd.get('total', 0)} 概念 / {wd.get('image_count', 0)} 图")
+        pool_kinds = {p["kind"] for p in c.get("/api/pools").json()["data"]}
+        check("概念过滤池都来自数据库类别",
+              all((not x.get("pool")) or x["pool"] in pool_kinds
+                  for x in wd.get("items", [])))
+        if wd.get("items"):
+            first = wd["items"][0]
+            check("概念卡片带真实代表图",
+                  bool(first.get("thumbs"))
+                  and str(first.get("thumb_url", "")).startswith("/api/"))
+            check("概念缩略图可读取", c.get(first["thumb_url"]).status_code == 200)
+            one = c.get("/api/concepts/thumbs", params={"key": first["key"]})
+            check("单概念反查", one.status_code == 200 and one.json()["data"]["found"])
+            batch = c.post("/api/concepts/thumbs-batch",
+                           json={"keys": [first["key"], "不存在的xyz"], "limit": 2})
+            check("批量概念反查", batch.status_code == 200
+                  and len(batch.json()["data"]["items"]) == 2)
+            info = c.get("/api/concepts/wall", params={"limit": 3, "kind": "底模"})
+            check("信息类概念按类别查看", info.json()["data"]["total"] >= 1)
+
+        print("-- 语义抽卡（索引缺失时验证降级） --")
+        sst = c.get("/api/semantics/status").json()["data"]
+        if sst.get("ready"):
+            sug = c.get("/api/semantics/suggest",
+                        params={"q": "厚涂暗色调逆光", "top_k": 4}).json()
+            sitems = sug.get("data", {}).get("items", [])
+            check("语义卡片带风格样图与历史出图",
+                  sug.get("ok") is True and len(sitems) >= 1
+                  and "history" in sitems[0] and bool(sitems[0].get("thumb_url")))
+            check("外部风格样图只读分发",
+                  c.get("/api/semantics/thumb",
+                        params={"index": sitems[0]["index"]}).status_code == 200)
+        else:
+            degraded = c.get("/api/semantics/suggest", params={"q": "厚涂"})
+            check("语义索引缺失时降级为 503",
+                  degraded.status_code == 503 and degraded.json()["ok"] is False)
+        check("概念与语义端点已注册",
+              "/api/concepts/wall" in spec.get("paths", {})
+              and "/api/semantics/suggest" in spec.get("paths", {}))
+
+        print("-- 离线依赖（零下载约定） --")
+        req = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        bat = (ROOT / "scripts" / "start.bat").read_text(encoding="utf-8")
+        check("离线依赖搬运脚本存在",
+              (ROOT / "scripts" / "vendor_deps.py").is_file())
+        check("requirements 不会触发 ONNX 下载",
+              "onnxruntime==" not in req and "tokenizers==" not in req)
+        check("start.bat 不自动 pip 安装",
+              "pip install -r requirements.txt" not in bat.replace(
+                  "Install manually once - python -m pip install -r requirements.txt", ""))
+        vd = ROOT / "vendor" / "pydeps"
+        check("本机依赖已搬入 vendor/pydeps",
+              (vd / "onnxruntime" / "__init__.py").is_file()
+              and (vd / "tokenizers" / "__init__.py").is_file())
+        from backend.app.core import embed  # noqa: E402
+        cached = (embed.cache_model_dir() / "model.onnx").is_file()
+        check("模型权重已搬入项目（零下载）", embed.is_ready(),
+              "缓存副本仍在（可再生）" if cached else "缓存副本已剪切移除")
+
     passed = sum(1 for _n, ok, _d in RESULTS if ok)
     print(f"\n== 汇总: {passed}/{len(RESULTS)} 通过 ==")
     for name, ok, detail in RESULTS:

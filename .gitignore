@@ -26,6 +26,9 @@ data/*.db-*
 data/outputs/
 data/thumbs/
 data/backups/
+# 语义索引与本地模型权重：可重建、体积大，不进版本库
+data/semantics/
+data/models/
 logs/
 *.log
 *.bak
