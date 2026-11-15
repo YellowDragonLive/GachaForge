@@ -2,7 +2,8 @@
 """全链路冒烟：固定入口 `python scripts/smoke_test.py`。
 
 默认强制 mock 模式，不依赖 ComfyUI 在线。覆盖编译、健康检查、抽卡复现、
-旧算法一致性、任务状态机、幂等、图片落盘/缩略图/标注/导出、静态前端与错误结构。
+旧算法一致性、抽卡 detail 前后端契约、任务状态机、幂等、图片落盘/缩略图/标注/导出、
+静态前端与错误结构。
 
 重要：全程跑在 %TEMP% 的临时库副本上，不写正式库、不污染画廊。
 配置必须在 import backend.app.main 之前设好，因为 db.py 模块级就会创建 engine。
@@ -111,6 +112,21 @@ def legacy_algorithm_match() -> tuple[bool, str]:
     return sig(a) == sig(b), f"{len(a)} 条条目比对"
 
 
+def frontend_contract() -> tuple[bool, str]:
+    """Node 跑前端纯函数契约测试；无 node 时跳过（不计失败）。"""
+    node = shutil.which("node")
+    script = ROOT / "scripts" / "test_frontend.mjs"
+    if not node or not script.is_file():
+        return True, "跳过（node 或测试脚本不可用）"
+    try:
+        p = subprocess.run([node, str(script)], cwd=ROOT, capture_output=True,
+                           text=True, timeout=60)
+    except Exception as exc:
+        return False, f"执行失败: {exc}"
+    lines = p.stdout.strip().splitlines()
+    return p.returncode == 0, (lines[-1] if lines else p.stderr.strip()[:120])
+
+
 def wait_job(c: TestClient, job_id: int, timeout: float = 12.0) -> dict:
     end = time.monotonic() + timeout
     while time.monotonic() < end:
@@ -126,6 +142,8 @@ def main() -> int:
     print("== 抽卡工作台冒烟测试（mock 模式） ==")
     ok_legacy, note = legacy_algorithm_match()
     check("旧抽卡算法一致性", ok_legacy, note)
+    ok_fe, note_fe = frontend_contract()
+    check("前端 detail 契约（Node）", ok_fe, note_fe)
 
     with TestClient(app) as c:
         print("-- 基础 --")
@@ -150,6 +168,20 @@ def main() -> int:
               f"{len(s1['draws'])} 抽 / {s1['pool_count']} 池")
         check("抽卡快照已保存",
               c.get(f"/api/draw-sessions/{s2['session_id']}").json()["ok"])
+
+        # detail 契约：两种抽卡模式都必须返回 {slot, tags: list[str]}，
+        # 否则前端渲染卡片时会抛 "x.tags.join is not a function"。
+        recipe_detail = [x for d in s1["draws"] for x in d["detail"]]
+        check("配方模式 detail 契约统一",
+              bool(recipe_detail) and all(
+                  "slot" in x and isinstance(x.get("tags"), list) for x in recipe_detail),
+              f"{len(recipe_detail)} 个槽位")
+        free = c.post("/api/draw-sessions", json={"pulls": 2, "seed": 7}).json()["data"]
+        free_detail = [x for d in free["draws"] for x in d["detail"]]
+        check("全池随机 detail 契约统一",
+              bool(free_detail) and all(
+                  "slot" in x and isinstance(x.get("tags"), list) for x in free_detail),
+              f"{len(free_detail)} 个槽位")
 
         print("-- 任务与幂等 --")
         did = s2["draws"][0]["id"]
@@ -184,7 +216,7 @@ def main() -> int:
         check("404 统一错误结构", miss.status_code == 404 and "error" in miss.json())
         page = c.get("/")
         check("静态首页", page.status_code == 200 and "抽卡工作台" in page.text)
-        for asset in ("/app.js", "/api.js", "/styles.css"):
+        for asset in ("/app.js", "/api.js", "/detail.js", "/styles.css"):
             check(f"静态资源 {asset}", c.get(asset).status_code == 200)
         spec = c.get("/openapi.json").json()
         check("SSE 端点已注册", "/api/jobs/stream" in spec.get("paths", {}))
