@@ -125,7 +125,14 @@ tr:hover td { background: var(--surface-2); }
 .tile img { width: 100%; height: 190px; object-fit: cover; display: block; cursor: zoom-in;
   background: var(--surface-2); }
 .tile .meta { padding: 8px 10px; font-size: 11px; color: var(--muted); }
-.tile .ops { display: flex; gap: 6px; padding: 0 10px 10px; }
+.tile .ops { display: flex; gap: 6px; padding: 0 10px 10px;
+  flex-wrap: wrap; align-items: center; }
+/* 五星评分：点第 n 颗 = n 分，点当前分 = 清零；画廊与概念页同一语义 */
+.stars { display: inline-flex; gap: 1px; }
+.star { border: 0; background: transparent; color: var(--line); font-size: 15px;
+  line-height: 1; padding: 0 1px; cursor: pointer; }
+.star.on { color: #e0a020; }
+.star:hover { color: var(--warn); }
 
 .toast { position: fixed; right: 22px; bottom: 22px; z-index: 50; max-width: 380px;
   padding: 11px 15px; border-radius: 9px; background: #222b40; color: #fff;

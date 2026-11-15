@@ -7,7 +7,7 @@ import {
   poolOptionsHtml, tagOptionsHtml, normalizeLoras, loraOptionsHtml, loraRowsHtml,
   normalizeSlots, slotRowsHtml, slotPoolOptionsHtml,
   conceptCardsHtml, conceptKindChipsHtml, semanticCardsHtml, conceptStripHtml,
-  coverPopoverHtml, conceptDetailHtml,
+  coverPopoverHtml, conceptDetailHtml, ratingStarsHtml,
 } from './widgets.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -651,6 +651,19 @@ function updateDrawCard(id) {
   if (box) box.innerHTML = drawStateHtml(d);
 }
 
+/** 局部重绘星级：不重建列表，评分时画廊不闪、滚动位置也不丢。 */
+function paintStars(id, rating) {
+  const cur = Math.max(0, Math.min(5, Number(rating) || 0));
+  document.querySelectorAll(`[data-stars-for="${id}"]`).forEach((box) => {
+    box.setAttribute('aria-label', `评分 ${cur} / 5`);
+    box.querySelectorAll('.star').forEach((b, i) => {
+      const n = i + 1;
+      b.classList.toggle('on', n <= cur);
+      b.dataset.v = n === cur ? 0 : n;
+    });
+  });
+}
+
 /** 批量拉状态：抽 3~8 张只打一个请求。 */
 async function refreshDrawStates(ids) {
   const list = (ids || []).map(Number).filter((x) => x > 0);
@@ -911,8 +924,8 @@ function galleryTiles() {
     <div class="meta">#${im.id} · ${esc(im.origin)} · ${im.width}×${im.height}<br>
       ${esc(cut(im.meta?.prompt || im.meta?.name || '', 46))}</div>
     <div class="ops">
-      <button class="btn small" data-act="img-fav" data-id="${im.id}">${im.favorite ? '★' : '☆'}</button>
-      <button class="btn small" data-act="img-rate" data-id="${im.id}" data-v="${(im.rating % 5) + 1}">评分 ${im.rating}</button>
+      <button class="btn small" data-act="img-fav" data-id="${im.id}" data-v="${im.favorite ? 0 : 1}">${im.favorite ? '★ 已收藏' : '☆ 收藏'}</button>
+      ${ratingStarsHtml(im.id, im.rating)}
       ${im.meta?.draw_id ? `<button class="btn small" data-act="img-rerun" data-id="${im.id}">同参重跑</button>` : ''}
     </div></div>`).join('');
 }
@@ -1094,31 +1107,35 @@ async function onClick(e) {
           : { favorite: btn.dataset.v === '1' };
         await api.patch('/api/images/' + id, body);
         state.covers.cache = {};   // 评分 / 收藏会改变封面，缓存必须失效
+        const rating = act === 'img-rate' ? Number(btn.dataset.v) : null;
+        const fav = act === 'img-fav' ? btn.dataset.v === '1' : null;
+
         if (state.route === 'concept') {
           const item = state.conceptPage.items.find((x) => x.id === id);
           if (item) {
-            if (act === 'img-rate') item.rating = Number(btn.dataset.v);
-            else item.favorite = btn.dataset.v === '1';
+            if (rating !== null) item.rating = rating;
+            if (fav !== null) item.favorite = fav;
           }
           view.innerHTML = conceptDetailHtml(state.conceptPage);
-        } else if (state.route === 'gallery') {
-          const im = state.images.find((x) => x.id === id);
-          if (im) {
-            if (act === 'img-rate') im.rating = Number(btn.dataset.v);
-            else im.favorite = btn.dataset.v === '1';
-          }
-          await renderGallery();
         } else {
-          // 抽卡结果卡：只换状态区，不重绘整页
-          for (const list of Object.values(state.drawImages)) {
+          const lists = state.route === 'gallery'
+            ? [state.images] : Object.values(state.drawImages);
+          for (const list of lists) {
             const im = list.find((x) => x.id === id);
             if (!im) continue;
-            if (act === 'img-rate') im.rating = Number(btn.dataset.v);
-            else im.favorite = btn.dataset.v === '1';
+            if (rating !== null) im.rating = rating;
+            if (fav !== null) im.favorite = fav;
+          }
+          // 局部更新，不重绘整页：画廊的滚动位置与已加载的图都不会丢
+          if (rating !== null) paintStars(id, rating);
+          if (fav !== null) {
+            document.querySelectorAll(`[data-act="img-fav"][data-id="${id}"]`).forEach((b) => {
+              b.dataset.v = fav ? 0 : 1;
+              b.textContent = fav ? '★ 已收藏' : '☆ 收藏';
+            });
           }
           const did = Number(btn.dataset.draw);
-          if (did) updateDrawCard(did);
-          else await refreshDrawStates(state.draws.map((d) => d.id));
+          if (state.route === 'draw' && did) updateDrawCard(did);
         }
         done(act === 'img-rate' ? '评分已保存' : '收藏已更新');
         break;

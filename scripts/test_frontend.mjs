@@ -417,6 +417,20 @@ const cases = [
     assert.match(app, /state\.form\.gen_profile_id = String\(saved\.id\)/,
       '保存后应自动应用，否则还要手动重选预设');
   }],
+  ['五星评分：点第 n 颗给 n 分、点当前分清零、画廊不再 +1 循环', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const html = W.ratingStarsHtml(7, 3);
+    assert.match(html, /data-stars-for="7"/);
+    assert.equal((html.match(/class="star on"/g) || []).length, 3, '3 分应点亮 3 颗');
+    assert.match(html, /data-id="7" data-v="0"/, '点当前分应清零');
+    assert.match(html, /data-v="5"/, '应能直接点到 5 分');
+    assert.equal((W.ratingStarsHtml(9, 0).match(/class="star on"/g) || []).length, 0);
+    assert.equal((W.ratingStarsHtml(1, 99).match(/class="star on"/g) || []).length, 5,
+      '越界评分要夹到 5');
+    assert.doesNotMatch(app, /\(im\.rating % 5\) \+ 1/, '画廊不能再用 +1 循环');
+    assert.match(app, /function paintStars\(id, rating\)/, '缺少星级局部更新');
+    assert.match(app, /ratingStarsHtml\(im\.id, im\.rating\)/, '画廊未接五星');
+  }],
 ];
 
 for (const [name, fn] of cases) {

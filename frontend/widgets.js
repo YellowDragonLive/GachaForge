@@ -358,6 +358,18 @@ export function coverPopoverHtml(cover) {
   return `<span class="cover-pop">${inner}<span class="cover-pop-meta">${esc(meta)}</span></span>`;
 }
 
+/** 五星评分：点第 n 颗 = n 分，点当前分 = 清零。
+ *  比「点一次 +1」少 3 次点击，画廊与概念页也用同一套语义。 */
+export function ratingStarsHtml(id, rating, opts = {}) {
+  const cur = Math.max(0, Math.min(5, Number(rating) || 0));
+  const draw = opts.draw ? ` data-draw="${opts.draw}"` : '';
+  const stars = [1, 2, 3, 4, 5].map((n) =>
+    `<button type="button" class="star${n <= cur ? ' on' : ''}" data-act="img-rate"
+      data-id="${id}" data-v="${n === cur ? 0 : n}"${draw}
+      title="${n === cur ? '点一下清除评分' : `评 ${n} 分`}">★</button>`).join('');
+  return `<span class="stars" data-stars-for="${id}" aria-label="评分 ${cur} / 5">${stars}</span>`;
+}
+
 /** 概念详情页：首屏最多 50 张历史出图，可评分 / 收藏 / 加载更多。 */
 export function conceptDetailHtml(d) {
   const page = d && typeof d === 'object' ? d : {};
@@ -375,8 +387,7 @@ export function conceptDetailHtml(d) {
               : '<span class="concept-nopic">无缩略图</span>'}
       </button>
       <div class="tile-bar">
-        <button type="button" class="chip small${rating ? ' on' : ''}"
-          data-act="img-rate" data-id="${id}" data-v="${rating ? 0 : 5}">${rating ? '★ ' + rating : '☆ 评分'}</button>
+        ${ratingStarsHtml(id, rating)}
         <button type="button" class="chip small${fav ? ' on' : ''}"
           data-act="img-fav" data-id="${id}" data-v="${fav ? 0 : 1}">${fav ? '♥ 收藏' : '♡ 收藏'}</button>
       </div>
