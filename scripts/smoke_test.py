@@ -159,6 +159,23 @@ def main() -> int:
         check("内置配方存在", len(recipes) >= 3, f"{len(recipes)} 个")
         check("默认参数预设存在", len(profiles) >= 1)
 
+        # 点选控件的数据源：路由必须排在 /{pool_id} 之前，否则会被 int 校验吞掉变 422
+        hot = c.get("/api/pools/tag-suggest?limit=20")
+        hot_data = hot.json()["data"] if hot.status_code == 200 else {}
+        check("tag 候选端点可用（路由顺序）",
+              hot.status_code == 200 and bool(hot_data.get("items"))
+              and all("value" in x and "count" in x for x in hot_data["items"]),
+              f"HTTP {hot.status_code} / {len(hot_data.get('items', []))} 项")
+        sug = c.get("/api/pools/tag-suggest?q=asuna&limit=20").json()["data"]
+        check("tag 候选：asuna 子串联想",
+              any("asuna" in x["value"] for x in sug["items"])
+              and all("," not in x["value"] and "\\" not in x["value"] for x in sug["items"]),
+              f"{[x['value'] for x in sug['items'][:4]]}")
+        scoped = c.get("/api/pools/tag-suggest?pool=角色&q=asuna").json()["data"]
+        check("tag 候选：按类别限定",
+              scoped["pool"] == "角色" and any("asuna" in x["value"] for x in scoped["items"]),
+              f"{scoped['pool']} / {len(scoped['items'])} 项")
+
         print("-- 抽卡与复现 --")
         body = {"recipe_id": recipes[0]["id"], "pulls": 3, "seed": 42}
         s1 = c.post("/api/draw-sessions", json=body).json()["data"]
@@ -275,10 +292,12 @@ def main() -> int:
         check("404 统一错误结构", miss.status_code == 404 and "error" in miss.json())
         page = c.get("/")
         check("静态首页", page.status_code == 200 and "抽卡工作台" in page.text)
-        for asset in ("/app.js", "/api.js", "/detail.js", "/styles.css"):
+        for asset in ("/app.js", "/api.js", "/detail.js", "/widgets.js", "/styles.css"):
             check(f"静态资源 {asset}", c.get(asset).status_code == 200)
         spec = c.get("/openapi.json").json()
         check("SSE 端点已注册", "/api/jobs/stream" in spec.get("paths", {}))
+        check("tag 候选端点已注册",
+              "/api/pools/tag-suggest" in spec.get("paths", {}))
 
     passed = sum(1 for _n, ok, _d in RESULTS if ok)
     print(f"\n== 汇总: {passed}/{len(RESULTS)} 通过 ==")

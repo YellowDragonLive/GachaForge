@@ -8,6 +8,11 @@ const src = readFileSync(new URL('../frontend/detail.js', import.meta.url), 'utf
 const { slotChips, esc, cut } = await import(
   'data:text/javascript;base64,' + Buffer.from(src).toString('base64'));
 
+// widgets.js 零 import，可直接用 data URL 加载，无需构建链 / package.json
+const widgetSrc = readFileSync(new URL('../frontend/widgets.js', import.meta.url), 'utf8');
+const W = await import(
+  'data:text/javascript;base64,' + Buffer.from(widgetSrc).toString('base64'));
+
 let passed = 0;
 const cases = [
   ['基础转义与截断', () => {
@@ -112,6 +117,87 @@ const cases = [
     }
     assert.doesNotMatch(app, /\.tags\.join\(/, '不得再对 tags 直接调用 join');
     assert.doesNotMatch(app, /id="dPulls" value="3"/, '表单值不得写死为默认值');
+  }],
+  ['过滤表达式：解析 / 追加去重 / 删除', () => {
+    assert.deepEqual(W.parseFilterSpec('角色:asuna, fate'), [
+      { pool: '角色', tag: 'asuna', raw: '角色:asuna' },
+      { pool: '', tag: 'fate', raw: 'fate' },
+    ]);
+    assert.equal(W.addFilter('角色:asuna', '角色', 'fate'), '角色:asuna, 角色:fate');
+    assert.equal(W.addFilter('角色:asuna', '角色', 'ASUNA'), '角色:asuna');
+    assert.equal(W.addFilter('', '角色', 'asuna'), '角色:asuna');
+    assert.equal(W.addFilter('', '', 'fate'), 'fate');
+    assert.equal(W.addFilter('a', 'p', 'x,y'), 'a, p:x y');  // 逗号会破坏表达式，自动清理
+    assert.equal(W.removeFilter('角色:asuna, fate', 0), 'fate');
+    assert.deepEqual(W.parseFilterSpec(''), []);
+  }],
+  ['过滤条件 chips：可删除、裸关键字标黄、注入被转义', () => {
+    const html = W.filterChipsHtml('角色:asuna, fate');
+    assert.equal((html.match(/data-act="filter-del"/g) || []).length, 2);
+    assert.match(html, /data-i="0"/);
+    assert.match(html, /class="chip warn removable"/);
+    assert.match(html, /fate（全局）/);
+    assert.doesNotMatch(W.filterChipsHtml('<img>:<script>'), /<script>/);
+    assert.match(W.filterChipsHtml(''), /未设置过滤/);
+  }],
+  ['池与 tag 下拉：类别优先、脏池名跳过、选中项保留', () => {
+    const pools = [
+      { name: 'zh_TW', kind: '角色', item_count: 120 },
+      { name: 'bad:name', kind: '角色', item_count: 3 },
+      { name: 'artists', kind: '画师', item_count: 40 },
+    ];
+    const html = W.poolOptionsHtml(pools, '角色');
+    assert.match(html, /optgroup label="按类别（推荐）"/);
+    assert.match(html, /value="角色" selected/);
+    assert.match(html, /角色 · 2 池 \/ 123 条/);
+    assert.match(html, /指定卡池 · 画师/);
+    assert.doesNotMatch(html, /value="bad:name"/);
+    assert.match(W.tagOptionsHtml([{ value: 'asuna', count: 18 }], 'fate'),
+      /value="fate" selected/);
+    assert.match(W.hotTagChipsHtml([{ value: 'asuna', count: 18 },
+      { value: '亚丝娜', count: 1, source: 'label' }]), /data-v="asuna"/);
+    assert.doesNotMatch(W.hotTagChipsHtml([{ value: '亚丝娜', count: 1, source: 'label' }]),
+      /data-act="filter-hot"/);
+  }],
+  ['LoRA：JSON 字符串 / 脏数据 / 去重 / 权重裁剪', () => {
+    assert.deepEqual(W.normalizeLoras('[{"name":"x.safetensors","weight":0.8}]'),
+      [{ name: 'x.safetensors', weight: 0.8 }]);
+    assert.deepEqual(W.normalizeLoras([
+      { name: 'a', weight: 0.5 }, { name: 'a', weight: 1 }, { name: '', weight: 1 },
+      null, { name: 'b' }, { name: 'c', weight: 99 },
+    ]), [{ name: 'a', weight: 0.5 }, { name: 'b', weight: 1 }, { name: 'c', weight: 4 }]);
+    assert.deepEqual(W.normalizeLoras('坏 JSON'), []);
+    const html = W.loraRowsHtml([{ name: 'a.safetensors', weight: 0.8 }]);
+    assert.match(html, /data-lora-w="0"/);
+    assert.match(html, /data-act="lora-del"/);
+    assert.match(html, /lora-up[^>]*disabled/);
+    assert.match(W.loraOptionsHtml(['a', 'b'], [{ name: 'a' }]), /value="a" disabled/);
+  }],
+  ['槽位表：可视化行、单一 datalist 引用、数值范围', () => {
+    assert.deepEqual(W.normalizeSlots('[{"pool":"角色","count":9,"weight":5}]'),
+      [{ pool: '角色', count: 9, weight: 1, filter: '' }]);
+    const html = W.slotRowsHtml([{ pool: '角色', count: 1, weight: 1, filter: 'fate' }],
+      [{ name: 'zh_TW', kind: '角色' }], [{ value: 'asuna' }]);
+    assert.match(html, /data-slot="pool"/);
+    assert.match(html, /data-slot="filter"/);
+    assert.match(html, /list="slotTagList"/);
+    assert.doesNotMatch(html, /<datalist/);   // datalist 由页面输出一份，避免重复 id
+    assert.match(html, /value="角色" selected/);
+    assert.match(W.slotPoolOptionsHtml([{ name: 'p', kind: '角色' }], '自定义池'),
+      /自定义池（自定义）/);
+  }],
+  ['app.js 接线：过滤构造器 / 槽位表 / LoRA 行', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    for (const needle of [
+      "from './widgets.js'", 'id="dFilterPool"', 'id="dFilterTag"', 'hotTagChipsHtml(',
+      'function setFilterSpec(', 'async function loadTagOptions(', 'function refreshSlots()',
+      'function refreshLoraRows()', 'slotRowsHtml(', 'loraRowsHtml(', 'normalizeLoras(',
+      'state.loraDraft', 'state.slotsDraft', 'await loadTagOptions()',
+    ]) {
+      assert.ok(app.includes(needle), `app.js 缺少接线：${needle}`);
+    }
+    assert.doesNotMatch(app, /JSON\.parse\(\$\('#pLoras'\)/, 'LoRA 不再要求用户手写 JSON');
+    assert.doesNotMatch(app, /槽位 JSON（pool/, '槽位 JSON 不再作为主输入');
   }],
 ];
 
