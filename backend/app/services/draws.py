@@ -161,7 +161,17 @@ def create_session(db: Session, params: dict) -> dict:
         else:
             card = draw_pull(rng, selected, count, bool(params.get("no_repeat")),
                              used_hist, all_pools=all_pools)
-            prompt, detail = build_prompt(card), card
+            prompt = build_prompt(card)
+            # 统一 detail 契约：无论是否用配方，每个槽位都是
+            # {slot, pool, label, tags: list[str]}。旧数据（tags 为字符串）
+            # 仍由前端 slotChips() 兼容，避免历史会话渲染失败。
+            detail = [
+                {"slot": it.get("friendly") or it.get("pool") or "条目",
+                 "pool": it.get("pool") or "",
+                 "label": it.get("label") or "",
+                 "tags": [str(it["tags"])] if it.get("tags") else []}
+                for it in card
+            ]
         cards.append({"idx": i + 1,
                       "seed": (int(seed) + i) if seed is not None else None,
                       "prompt": prompt, "negative": negative, "detail": detail})
