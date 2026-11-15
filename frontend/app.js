@@ -2,7 +2,8 @@
 import { api, jobStream, friendlyError } from './api.js';
 import { esc, cut, slotChips } from './detail.js';
 import {
-  parseFilterSpec, addFilter, removeFilter, filterChipsHtml, hotTagChipsHtml,
+  parseFilterSpec, addFilter, removeFilter, missingFilterSlots,
+  filterChipsHtml, hotTagChipsHtml,
   poolOptionsHtml, tagOptionsHtml, normalizeLoras, loraOptionsHtml, loraRowsHtml,
   normalizeSlots, slotRowsHtml, slotPoolOptionsHtml,
   conceptCardsHtml, conceptKindChipsHtml, semanticCardsHtml, conceptStripHtml,
@@ -27,6 +28,8 @@ const state = {
   loraDraft: [], slotsDraft: [],
   // 概念缩略图：数据库驱动的概念墙 + 本地语义检索（索引未构建时静默降级）
   concepts: { items: [], kinds: [], kind: '', q: '', image_count: 0, loaded: false },
+  // 概念探索面板的展开状态：整页重绘（抽卡 / 切视图）后不复位
+  conceptsExpanded: true,
   semantics: { ready: null, reason: '', items: [], q: '', mode: '' },
   conceptThumbMap: {},
   // 封面按需加载：按概念 key 缓存，新图产出后整体失效
@@ -89,7 +92,10 @@ function drawForm() {
     `<option value="${r.id}" ${sel(r.id, f.recipe_id)}>${esc(r.name)}</option>`).join('');
   const profileOpts = state.profiles.map((p) =>
     `<option value="${p.id}" ${sel(p.id, f.gen_profile_id)}>${esc(p.name)} · ${esc(p.checkpoint || '未设模型')}</option>`).join('');
-  return `${conceptPanel()}<div class="grid-2">
+  // 左右排布：设置栏 sticky 常驻，结果在右栏首屏；概念探索是可选增强，
+  // 放到结果下方并做成可折叠，避免全宽面板把「设置 + 结果」挤出首屏。
+  return `<div class="draw-shell">
+    <aside class="draw-side">
     <div class="panel">
       <div class="panel-head"><h2>抽卡设置</h2><span class="sub">${state.pools.length} 个卡池</span></div>
       <div class="field"><span>配方</span><select id="dRecipe"><option value="" ${sel('', f.recipe_id)}>（不用配方 · 全池随机）</option>${recipeOpts}</select></div>
@@ -129,26 +135,40 @@ function drawForm() {
       </div>
       <p class="hint" style="margin-bottom:0">同种子可复现；生图是后台任务，提交后可去「任务队列」看进度。</p>
     </div>
-    <div>
+    </aside>
+    <section class="draw-main">
       ${state.warnings.length ? `<div class="panel warn-panel"><b>本次抽卡提示</b>
         ${state.warnings.map((w) => `<div class="hint warn-text" style="margin-top:6px">${esc(w)}</div>`).join('')}</div>` : ''}
       ${state.draws.length ? `<div class="panel-head"><h2>本批结果 · ${state.draws.length} 抽</h2>
         <span class="sub">会话 #${state.session?.session_id ?? '-'} · seed ${esc(state.session?.seed ?? '随机')}</span></div>
         <div class="cards">${state.draws.map(drawCard).join('')}</div>` :
         `<div class="panel"><div class="loading">选好配方后点「抽 卡」，结果会显示在这里。</div></div>`}
-    </div>
+      ${conceptPanel()}
+    </section>
   </div>`;
 }
 
-/** 裸关键字是全局过滤，配方槽位会因此静默变空：输入时就地提示，不必等抽完。 */
+/** 过滤的两种「看起来生效其实没有」的情况，输入时就地提示，不必等抽完。 */
 function filterHintText() {
   const f = state.form;
+  const notes = [];
   const bare = String(f.filter || '').split(',').map((s) => s.trim())
     .filter((s) => s && !s.includes(':') && !s.includes('：'));
-  if (!bare.length) return '';
-  const withRecipe = String(f.recipe_id || '') !== '';
-  return `⚠ 裸关键字 ${bare.join('、')} 会筛掉所有不含它的卡池` +
-    `${withRecipe ? '（配方槽位可能变空）' : ''}；只筛某个池请写「角色:fate」。`;
+  if (bare.length) {
+    const withRecipe = String(f.recipe_id || '') !== '';
+    notes.push(`⚠ 裸关键字 ${bare.join('、')} 会筛掉所有不含它的卡池` +
+      `${withRecipe ? '（配方槽位可能变空）' : ''}；只筛某个池请写「角色:fate」。`);
+  }
+  // 配方没有对应槽位时，后端会自动补一个槽位把 tag 写进 prompt；这里先讲清楚，
+  // 避免用户以为「选了画师却没写进 prompt」又是一次静默失效。
+  const recipe = state.recipes.find((r) => String(r.id) === String(f.recipe_id));
+  const missing = missingFilterSlots(f.filter, recipe, state.pools);
+  if (missing.length) {
+    notes.push(`ℹ ${missing.map((r) => `${r.pool}:${r.tag}`).join('、')} ` +
+      '在当前配方里没有对应槽位：抽卡时会自动补一个槽位，把所选 tag 写进 prompt；' +
+      '想固定下来可在「配方编辑器」里加上这个槽位。');
+  }
+  return notes.join('　');
 }
 
 function updateFilterHint() {
@@ -177,9 +197,10 @@ function conceptPanel() {
   const selectedKeys = parseFilterSpec(state.form.filter).map((r) => r.tag.toLowerCase());
   const feels = FEEL_PRESETS.map((f) =>
     `<button type="button" class="chip hot" data-act="feel-chip" data-v="${esc(f)}">${esc(f)}</button>`).join('');
-  return `<div class="panel concept-panel">
-    <div class="panel-head"><h2>看图选概念</h2>
-      <span class="sub">悬浮看一张代表图 · 点概念名看全部（首屏 50 张）· 点卡片加入过滤 · ${c.image_count} 张历史图</span></div>
+  return `<details class="panel explore" id="explorePanel" ${state.conceptsExpanded ? 'open' : ''}>
+    <summary class="explore-sum"><h2>看图选概念</h2>
+      <span class="sub">悬浮看一张代表图 · 点概念名看全部（首屏 50 张）· 点卡片加入过滤 · ${c.image_count} 张历史图</span></summary>
+    <div class="explore-body">
     <div class="semantic-bar">
       <input type="text" id="semanticQ" value="${esc(state.semantics.q)}"
         placeholder="想要的感觉：一句话描述画风，本地语义检索（可留空）">
@@ -197,7 +218,8 @@ function conceptPanel() {
     </div>
     <div class="hot-tags" id="conceptKinds">${conceptKindChipsHtml(c.kinds, c.kind)}</div>
     <div id="conceptWall">${conceptCardsHtml(c.items.slice(0, 12), { selectedKeys })}</div>
-  </div>`;
+    </div>
+  </details>`;
 }
 
 function syncConceptPanel() {
@@ -1104,6 +1126,10 @@ async function boot() {
   view.addEventListener('mouseout', onCoverOut);
   view.addEventListener('focusin', onCoverOver);
   view.addEventListener('focusout', onCoverOut);
+  // <details> 的 toggle 不冒泡，用捕获阶段记住展开状态，抽卡重绘后不复位
+  view.addEventListener('toggle', (e) => {
+    if (e.target && e.target.id === 'explorePanel') state.conceptsExpanded = e.target.open;
+  }, true);
   document.querySelectorAll('#nav button').forEach((b) =>
     b.addEventListener('click', () => { location.hash = '#' + b.dataset.view; }));
   window.addEventListener('hashchange', onRoute);

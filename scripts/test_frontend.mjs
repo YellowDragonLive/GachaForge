@@ -336,6 +336,39 @@ const cases = [
     }
     assert.doesNotMatch(app, /thumbs: '2'/, '概念墙不再一次拉多张缩略图');
   }],
+  ['缺槽位提示：类别与具体池名统一折算成 kind', () => {
+    const pools = [
+      { name: '画师图鉴', kind: '画师' },
+      { name: 'zh_TW', kind: '角色' },
+      { name: '自然景观-花卉', kind: '背景' },
+    ];
+    const recipe = { definition: { slots: [{ pool: '自然景观-花卉' }, { pool: '角色' }] } };
+    const missing = W.missingFilterSlots('画师:bowalia, 角色:asuna, fate', recipe, pools);
+    assert.deepEqual(missing.map((r) => `${r.pool}:${r.tag}`), ['画师:bowalia']);
+    // 具体池名 zh_TW 折算成「角色」kind，与配方的「角色」槽位匹配，不该再提示
+    assert.deepEqual(W.missingFilterSlots('zh_TW:asuna', recipe, pools), []);
+    assert.deepEqual(W.missingFilterSlots('画师:bowalia',
+      { definition: { slots: [{ pool: '画师' }] } }, pools), []);
+    // 不用配方 / 空表达式 / 裸关键字都不提示
+    assert.deepEqual(W.missingFilterSlots('画师:bowalia', null, pools), []);
+    assert.deepEqual(W.missingFilterSlots('', recipe, pools), []);
+    assert.deepEqual(W.missingFilterSlots('fate', recipe, pools), []);
+  }],
+  ['抽卡台左右布局：设置 sticky + 结果优先 + 概念可折叠', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
+    for (const needle of ['class="draw-shell"', 'class="draw-side"',
+      'class="draw-main"', 'id="explorePanel"', 'state.conceptsExpanded',
+      "addEventListener('toggle'", 'missingFilterSlots(', '${conceptPanel()}',
+      'min(96vw, 1680px)']) {
+      assert.ok(app.includes(needle) || css.includes(needle),
+        `左右布局缺少接线：${needle}`);
+    }
+    assert.match(css, /\.draw-side\s*\{[^}]*position:\s*sticky/);
+    assert.match(css, /\.draw-shell\s*\{[^}]*336px/);
+    assert.doesNotMatch(app, /conceptPanel\(\)}<div class="grid-2"/,
+      '概念面板不能再全宽压在抽卡设置上方');
+  }],
 ];
 
 for (const [name, fn] of cases) {
