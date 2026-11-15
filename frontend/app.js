@@ -19,7 +19,9 @@ const FORM_KEY = 'gacha_draw_form';
 const state = {
   recipes: [], profiles: [], pools: [], batches: [], jobs: [], images: [],
   config: {}, comfy: {}, models: {}, session: null, draws: [], warnings: [],
-  currentView: 'draw', editingRecipe: null, openPool: null,
+  currentView: 'draw', route: 'draw', editingRecipe: null, openPool: null,
+  // 结果卡片内联状态：draw_id → 最新任务 / 已出图片（抽完即看，不必跳任务队列或画廊）
+  drawJobs: {}, drawImages: {},
   gallery: { favorite: '', origin: '', min_rating: 0 },
   // 抽卡台表单值集中保存：重绘 / 切视图 / 刷新都不再丢失用户的选择
   form: { recipe_id: '', pulls: 3, count: 1, seed: '', filter: '', gen_profile_id: '' },
@@ -129,11 +131,14 @@ function drawForm() {
       <div class="field" style="margin-top:10px"><span>生成参数预设</span>
         <select id="dProfile"><option value="" ${sel('', f.gen_profile_id)}>（跟随配方 / 默认）</option>${profileOpts}</select></div>
       <div class="row" style="margin-top:14px">
-        <button class="btn primary" data-act="draw">抽 卡</button>
-        <button class="btn" data-act="gen-all" ${state.draws.length ? '' : 'disabled'}>本批全部生图</button>
-        ${state.draws.length ? '<button class="btn" data-act="draw-clear">清空结果</button>' : ''}
+        <button class="btn primary" style="flex:1" data-act="draw-and-gen">抽卡并生图</button>
+        <button class="btn" data-act="draw">只抽卡</button>
       </div>
-      <p class="hint" style="margin-bottom:0">同种子可复现；生图是后台任务，提交后可去「任务队列」看进度。</p>
+      <div class="row" style="margin-top:8px">
+        <button class="btn small" data-act="gen-all" ${state.draws.length ? '' : 'disabled'}>本批全部生图</button>
+        ${state.draws.length ? '<button class="btn small" data-act="draw-clear">清空结果</button>' : ''}
+      </div>
+      <p class="hint" style="margin-bottom:0">同种子可复现；生图进度直接显示在结果卡片上，不用切页面去看队列。</p>
     </div>
     </aside>
     <section class="draw-main">
@@ -416,19 +421,89 @@ function restoreForm() {
   } catch (_) { /* 坏数据忽略，用默认表单 */ }
 }
 
+/** 结果卡：状态与图直接长在卡片上，抽完就能看到，不必跳任务队列或画廊。
+ *  prompt 收进折叠区——3 抽并排时长 textarea 会把图挤出首屏。 */
 function drawCard(d) {
   const chips = slotChips(d.detail);
-  return `<div class="card">
+  return `<div class="card draw-card" data-card="${d.id}">
     <div class="card-head"><b>第 ${d.idx} 抽</b><span>seed ${esc(d.seed ?? '随机')} · #${d.id}</span></div>
-    <textarea data-prompt="${d.id}" id="prompt_${d.id}">${esc(d.prompt)}</textarea>
+    <div class="card-state" data-state-for="${d.id}">${drawStateHtml(d)}</div>
+    <details class="card-prompt">
+      <summary>prompt 快照 · ${esc(cut(d.prompt, 52))}</summary>
+      <textarea data-prompt="${d.id}" id="prompt_${d.id}">${esc(d.prompt)}</textarea>
+      <div class="hint">编辑只影响复制，生图始终按抽卡时的快照执行（同 seed 可复现）。</div>
+    </details>
     <div class="tags">${chips || '<span class="hint">无槽位明细</span>'}</div>
     ${conceptStripHtml(d.detail, state.conceptThumbMap)}
-    <div class="hint">此处编辑用于复制调整；生图使用抽卡时保存的快照，保证同 seed 可复现。</div>
-    <div class="row" style="margin-top:10px">
-      <button class="btn small" data-act="copy" data-id="${d.id}">复制</button>
-      <button class="btn small primary" data-act="gen-one" data-id="${d.id}">生成此图</button>
+    <div class="row">
+      <button class="btn small" data-act="copy" data-id="${d.id}">复制 prompt</button>
     </div>
   </div>`;
+}
+
+/** 一抽的状态区：待生成 / 排队 / 进度 / 已出图 / 失败重试，全部内联。 */
+function drawStateHtml(d) {
+  const job = state.drawJobs[d.id];
+  const imgs = state.drawImages[d.id] || [];
+  if (imgs.length) {
+    const im = imgs[0];
+    return `<div class="shot">
+      <img class="shot-img" src="/api/images/${im.id}/thumb" loading="lazy"
+        alt="第 ${d.idx} 抽的生成图" data-act="img-open" data-id="${im.id}">
+      <div class="shot-ops">
+        <button class="btn small" data-act="img-fav" data-id="${im.id}" data-draw="${d.id}"
+          data-v="${im.favorite ? 0 : 1}">${im.favorite ? '★ 已收藏' : '☆ 收藏'}</button>
+        <button class="btn small" data-act="gen-one" data-id="${d.id}" data-force="1">重跑</button>
+        ${imgs.length > 1 ? `<span class="hint">同抽 ${imgs.length} 张</span>` : ''}
+      </div>
+    </div>`;
+  }
+  if (!job) {
+    return `<div class="state-row"><span class="state">待生成</span>
+      <button class="btn small primary" data-act="gen-one" data-id="${d.id}">生成此图</button></div>`;
+  }
+  if (job.status === 'queued' || job.status === 'submitted') {
+    return `<div class="state-row"><span class="state running">排队中</span>
+      <span class="hint">进度会在这里更新，不用切页面</span></div>`;
+  }
+  if (job.status === 'running' || job.status === 'cancelling') {
+    const pct = Math.max(0, Math.min(99, Number(job.progress) || 0));
+    return `<div class="state-row"><span class="state running">生成中 ${pct}%</span>
+      <span class="hint">${job.step || 0}/${job.steps_total || 0} 步</span></div>
+      <div class="bar"><i style="width:${pct}%"></i></div>`;
+  }
+  if (job.status === 'succeeded') {
+    return `<div class="state-row"><span class="state succeeded">已完成</span>
+      <span class="hint">正在取图…</span></div>`;
+  }
+  const cancelled = job.status === 'cancelled';
+  return `<div class="state-row"><span class="state ${cancelled ? 'cancelled' : 'failed'}">${cancelled ? '已取消' : '失败'}</span>
+    <button class="btn small" data-act="gen-one" data-id="${d.id}" data-force="1">重试</button></div>
+    ${job.error_message ? `<div class="err-text">${esc(cut(job.error_message, 200))}</div>` : ''}`;
+}
+
+/** 只换状态区，不重建整张卡：编辑 prompt 时不会因为进度更新而失焦。 */
+function updateDrawCard(id) {
+  const did = Number(id);
+  const card = document.querySelector(`[data-card="${did}"]`);
+  const d = state.draws.find((x) => x.id === did);
+  if (!card || !d) return;
+  const box = card.querySelector('[data-state-for]');
+  if (box) box.innerHTML = drawStateHtml(d);
+}
+
+/** 批量拉状态：抽 3~8 张只打一个请求。 */
+async function refreshDrawStates(ids) {
+  const list = (ids || []).map(Number).filter((x) => x > 0);
+  if (!list.length) return;
+  const rows = await api.get('/api/draws/status?draw_ids=' + list.join(','));
+  for (const row of rows || []) {
+    if (row.job) state.drawJobs[row.draw_id] = row.job;
+    if (Array.isArray(row.images) && row.images.length) {
+      state.drawImages[row.draw_id] = row.images;
+    }
+  }
+  if (state.route === 'draw') list.forEach(updateDrawCard);
 }
 
 async function renderDraw() { view.innerHTML = drawForm(); }
@@ -461,7 +536,7 @@ async function restoreLastDraw() {
   }
 }
 
-async function doDraw() {
+async function doDraw({ generate = false } = {}) {
   readDrawForm();
   const f = state.form;
   const body = {
@@ -475,16 +550,42 @@ async function doDraw() {
   const data = await api.post('/api/draw-sessions', body);
   state.session = data; state.draws = data.draws;
   state.warnings = data.warnings || [];
+  // 新批次：清掉上一批的卡片状态，避免同 id 撞车显示旧图
+  state.drawJobs = {}; state.drawImages = {};
   sessionStorage.setItem(LAST_SESSION_KEY, String(data.session_id));
-  done(`抽卡完成：${data.draws.length} 抽 / ${data.pool_count} 个池`);
   await renderDraw();
+  if (generate && state.draws.length) {
+    try {
+      await submitJobs(state.draws.map((d) => d.id), { silent: true });
+      done(`抽到 ${data.draws.length} 抽，已提交生图`);
+    } catch (err) {
+      fail(err);   // 生图提交失败不影响抽卡结果，卡片仍在「待生成」可单独重试
+    }
+  } else {
+    done(`抽卡完成：${data.draws.length} 抽 / ${data.pool_count} 个池`);
+  }
 }
 
-async function submitJobs(ids) {
+/** 提交生图。不再强制跳任务队列：状态与图回到结果卡片上，页面不离开。 */
+async function submitJobs(ids, opts = {}) {
+  const list = (ids || []).map(Number).filter((x) => x > 0);
+  if (!list.length) return null;
   const profileId = num(state.form.gen_profile_id, null);
-  const data = await api.post('/api/jobs', { draw_ids: ids, gen_profile_id: profileId });
-  done(`已提交 ${data.created.length} 个任务${data.reused.length ? `，复用 ${data.reused.length} 个` : ''}`);
-  location.hash = '#jobs';
+  const data = await api.post('/api/jobs', {
+    draw_ids: list, gen_profile_id: profileId, force: !!opts.force,
+  });
+  // 本地先标排队，点完立刻有反馈；真实状态由 SSE / refreshDrawStates 覆盖
+  list.forEach((did) => {
+    state.drawJobs[did] = { ...(state.drawJobs[did] || {}),
+      draw_id: did, status: 'queued', progress: 0 };
+  });
+  if (state.route === 'draw') list.forEach(updateDrawCard);
+  if (!opts.silent) {
+    done(`已提交 ${data.created.length} 个任务` +
+      `${data.reused.length ? `，复用 ${data.reused.length} 个` : ''}`);
+  }
+  if (opts.gotoJobs) location.hash = '#jobs';
+  return data;
 }
 
 // ---------------- 卡池管理 ----------------
@@ -681,11 +782,16 @@ async function renderGallery() {
 }
 
 function openLightbox(id) {
-  const im = state.images.find((x) => x.id === id);
-  if (!im) return;
+  // 抽卡台的图不在 state.images 里，先从结果卡缓存找一遍，找不到也照样打开原图
+  const im = state.images.find((x) => x.id === id)
+    || Object.values(state.drawImages).flat().find((x) => x.id === id);
   $('#lightboxImg').src = `/api/images/${id}/file`;
-  $('#lightboxInfo').textContent = `#${id} · ${im.width}×${im.height} · ` +
-    (im.meta?.prompt || im.meta?.name || '') + ` · seed ${im.meta?.seed ?? '-'}`;
+  const parts = [`#${id}`];
+  if (im?.width) parts.push(`${im.width}×${im.height}`);
+  const desc = im?.meta?.prompt || im?.meta?.name || '';
+  if (desc) parts.push(desc);
+  if (im?.meta?.seed !== undefined && im?.meta?.seed !== null) parts.push(`seed ${im.meta.seed}`);
+  $('#lightboxInfo').textContent = parts.join(' · ');
   $('#lightbox').hidden = false;
 }
 
@@ -777,6 +883,7 @@ async function onClick(e) {
   const act = btn.dataset.act, id = Number(btn.dataset.id), i = Number(btn.dataset.i);
   try {
     switch (act) {
+      case 'draw-and-gen': await doDraw({ generate: true }); break;
       case 'draw': await doDraw(); break;
       // --- 过滤构造器：全程点选，写回 #dFilter 让原有提交/提示链路不变 ---
       case 'filter-add': {
@@ -823,13 +930,33 @@ async function onClick(e) {
         const body = act === 'img-rate' ? { rating: Number(btn.dataset.v) }
           : { favorite: btn.dataset.v === '1' };
         await api.patch('/api/images/' + id, body);
-        const item = state.conceptPage.items.find((x) => x.id === id);
-        if (item) {
-          if (act === 'img-rate') item.rating = Number(btn.dataset.v);
-          else item.favorite = btn.dataset.v === '1';
-        }
         state.covers.cache = {};   // 评分 / 收藏会改变封面，缓存必须失效
-        view.innerHTML = conceptDetailHtml(state.conceptPage);
+        if (state.route === 'concept') {
+          const item = state.conceptPage.items.find((x) => x.id === id);
+          if (item) {
+            if (act === 'img-rate') item.rating = Number(btn.dataset.v);
+            else item.favorite = btn.dataset.v === '1';
+          }
+          view.innerHTML = conceptDetailHtml(state.conceptPage);
+        } else if (state.route === 'gallery') {
+          const im = state.images.find((x) => x.id === id);
+          if (im) {
+            if (act === 'img-rate') im.rating = Number(btn.dataset.v);
+            else im.favorite = btn.dataset.v === '1';
+          }
+          await renderGallery();
+        } else {
+          // 抽卡结果卡：只换状态区，不重绘整页
+          for (const list of Object.values(state.drawImages)) {
+            const im = list.find((x) => x.id === id);
+            if (!im) continue;
+            if (act === 'img-rate') im.rating = Number(btn.dataset.v);
+            else im.favorite = btn.dataset.v === '1';
+          }
+          const did = Number(btn.dataset.draw);
+          if (did) updateDrawCard(did);
+          else await refreshDrawStates(state.draws.map((d) => d.id));
+        }
         done(act === 'img-rate' ? '评分已保存' : '收藏已更新');
         break;
       }
@@ -944,14 +1071,6 @@ async function onClick(e) {
       case 'job-retry': await api.post(`/api/jobs/${id}/retry`, {}); await renderJobs(); break;
       case 'goto-gallery': location.hash = '#gallery'; break;
       case 'img-open': openLightbox(id); break;
-      case 'img-fav': {
-        const im = state.images.find((x) => x.id === id);
-        await api.patch(`/api/images/${id}`, { favorite: !im.favorite });
-        await renderGallery(); break;
-      }
-      case 'img-rate':
-        await api.patch(`/api/images/${id}`, { rating: Number(btn.dataset.v) });
-        await renderGallery(); break;
       case 'img-rerun': {
         const im = state.images.find((x) => x.id === id);
         await api.post('/api/jobs', { draw_ids: [im.meta.draw_id], force: true });
@@ -1000,6 +1119,7 @@ async function onRoute() {
   const raw = (location.hash.slice(1) || 'draw').replace(/^\//, '');
   if (raw.startsWith('concept/')) {
     setNav('draw');
+    state.route = 'concept';
     try {
       await renderConceptPage(decodeURIComponent(raw.slice(8)));
     } catch (err) {
@@ -1012,6 +1132,7 @@ async function onRoute() {
   let v = raw;
   if (!['draw', 'pools', 'recipes', 'jobs', 'gallery', 'settings'].includes(v)) v = 'draw';
   setNav(v);
+  state.route = v;
   try {
     if (v === 'draw') await renderDraw();
     else if (v === 'pools') await renderPools();
@@ -1106,11 +1227,29 @@ function startStream() {
     if (!ev || !ev.job_id) return;
     const j = state.jobs.find((x) => x.id === ev.job_id);
     if (j) Object.assign(j, ev);
-    else state.jobs.unshift({ id: ev.job_id, draw_id: '-', created_at: '', ...ev });
+    else state.jobs.unshift({ id: ev.job_id, draw_id: ev.draw_id ?? '-', created_at: '', ...ev });
+
+    // 结果卡就地更新：进度、完成、失败都不离开抽卡台
+    const did = Number(ev.draw_id ?? j?.draw_id);
+    if (did > 0) {
+      state.drawJobs[did] = { ...(state.drawJobs[did] || {}), ...ev };
+      if (ev.status === 'succeeded') {
+        state.covers.cache = {};   // 新图可能成为某个概念的新封面
+        const ids = Array.isArray(ev.image_ids) ? ev.image_ids : [];
+        // 事件里已带 image_ids：先直接上图，再异步补齐宽高/评分等字段
+        if (ids.length) state.drawImages[did] = ids.map((id) => ({ id, rating: 0, favorite: false }));
+        if (state.route === 'draw') {
+          updateDrawCard(did);
+          refreshDrawStates([did]).then(() => updateDrawCard(did)).catch(() => {});
+        }
+      } else if (state.route === 'draw') {
+        updateDrawCard(did);
+      }
+    }
+
     if (state.currentView === 'jobs') refreshJobsBody();
-    if (ev.status === 'succeeded') {
-      state.covers.cache = {};   // 新图可能成为某个概念的新封面
-      if (state.currentView === 'gallery') renderGallery().catch(fail);
+    if (ev.status === 'succeeded' && state.currentView === 'gallery') {
+      renderGallery().catch(fail);
     }
   }, (ok) => {
     const el = $('#streamState');
@@ -1147,6 +1286,10 @@ async function boot() {
     }
     await loadTagOptions();
     await restoreLastDraw();
+    // 刷新页面后把上一批的任务状态与已出图补回卡片，否则会全部显示「待生成」
+    if (state.draws.length) {
+      await refreshDrawStates(state.draws.map((d) => d.id)).catch(() => {});
+    }
     startStream();
     await onRoute();
     // 概念墙不依赖任何 AI 服务，始终加载；语义索引未构建时只显示一行降级提示

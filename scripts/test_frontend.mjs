@@ -369,6 +369,28 @@ const cases = [
     assert.doesNotMatch(app, /conceptPanel\(\)}<div class="grid-2"/,
       '概念面板不能再全宽压在抽卡设置上方');
   }],
+  ['结果卡内联状态：图长在卡片上，提交生图不再跳任务队列', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
+    assert.match(app, /function drawStateHtml\(d\)/, '缺少卡片状态渲染');
+    assert.match(app, /function updateDrawCard\(id\)/, '缺少局部刷新');
+    assert.match(app, /async function refreshDrawStates\(ids\)/, '缺少批量状态拉取');
+    assert.match(app, /\/api\/draws\/status\?draw_ids=/, '未接批量状态接口');
+    assert.match(app, /data-state-for="\$\{d\.id\}"/, '卡片缺少状态容器');
+    assert.match(app, /data-act="draw-and-gen"[^>]*>抽卡并生图/, '主按钮未合并生图');
+    assert.match(app, /data-act="draw">只抽卡/, '缺少只抽卡次级入口');
+    const submit = (app.match(/async function submitJobs[\s\S]*?\n\}/) || [''])[0];
+    assert.ok(submit, '未找到 submitJobs');
+    assert.doesNotMatch(submit, /done\([^)]*\);\s*location\.hash = '#jobs'/,
+      '提交生图默认不能跳页');
+    // 只有显式 opts.gotoJobs（画廊「同参重跑」这类跨页场景）才允许跳
+    assert.match(submit, /if \(opts\.gotoJobs\) location\.hash = '#jobs'/,
+      '跳页必须是显式可选项');
+    assert.match(app, /state\.drawImages\[did\] = ids\.map/,
+      '完成事件应直接用 image_ids 上图');
+    assert.match(css, /\.card-state\s*\{/, '缺少状态区样式');
+    assert.match(css, /\.shot-img\s*\{/, '缺少卡片内缩略图样式');
+  }],
 ];
 
 for (const [name, fn] of cases) {
