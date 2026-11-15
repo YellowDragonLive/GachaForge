@@ -1,0 +1,55 @@
+# -*- coding: utf-8 -*-
+"""语义抽卡接口：候选画师卡片 + 风格样图只读分发。"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+
+from ..core import semantics
+from ..db import get_db
+from ..errors import AppError, ok
+from ..services import concepts
+
+router = APIRouter(prefix="/api/semantics", tags=["semantics"])
+
+
+def _unavailable(exc: semantics.SemanticsUnavailable) -> AppError:
+    return AppError(str(exc), code="semantics_unavailable", status=503)
+
+
+@router.get("/status")
+def status():
+    """索引是否就绪、编码器、条数；前端据此决定面板显示还是提示。"""
+    return ok(semantics.status())
+
+
+@router.get("/suggest")
+def suggest(q: str = "", top_k: int = Query(12, ge=1, le=30),
+            db: Session = Depends(get_db)):
+    """一句话画风 → 带样图的画师卡片；q 为空时给精选/核心/收藏。
+
+    每位画师再补一组「我用它真实出过的图」：抽象概念既能看外部风格锚点，
+    也能看自己数据库里的实际效果，两者叠加由眼睛做最终判断。
+    """
+    try:
+        data = semantics.suggest(q, top_k=top_k)
+    except semantics.SemanticsUnavailable as exc:
+        raise _unavailable(exc) from exc
+    for item in data.get("items", []):
+        hist = concepts.thumbs_for(db, str(item.get("name") or ""), limit=3)
+        item["history"] = {"image_count": hist["image_count"],
+                           "draw_count": hist["draw_count"],
+                           "thumbs": hist["thumbs"]}
+    return ok(data)
+
+
+@router.get("/thumb")
+def thumb(index: int = Query(..., ge=1)):
+    """按需读取项目外的风格缩略图，路径由构建时白名单决定，不接受任意路径。"""
+    try:
+        p = semantics.thumb_path(index)
+    except semantics.SemanticsUnavailable as exc:
+        raise _unavailable(exc) from exc
+    return FileResponse(str(p), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})

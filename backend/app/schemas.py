@@ -147,3 +147,8 @@ class ImportIn(BaseModel):
 
 class ScanDirIn(BaseModel):
     path: str = Field(min_length=1)
+
+
+class ConceptBatchIn(BaseModel):
+    keys: list[str] = Field(default_factory=list, max_length=40)
+    limit: int = Field(default=3, ge=1, le=12)

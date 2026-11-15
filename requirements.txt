@@ -9,3 +9,9 @@ alembic==1.20.1
 httpx==0.28.1
 websockets==17.4
 Pillow==13.0.0
+# 本地 ONNX 文本嵌入（语义抽卡）不在此清单里，也不需要 pip 下载：
+# 本机「艺术家智能选择」.venv 已有 onnxruntime 1.27.0 / tokenizers 0.23.1，
+# 由 scripts/vendor_deps.py 直接搬进 vendor/pydeps/，start.bat 自动挂载 PYTHONPATH。
+# 依赖缺失时语义面板降级提示，数据库驱动的概念缩略图墙不受影响。
+# 换机器且本机确实没有现成环境时，才需要手动装一次：
+#   python -m pip install onnxruntime tokenizers
