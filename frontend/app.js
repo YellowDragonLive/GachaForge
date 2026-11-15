@@ -1,6 +1,11 @@
 // 抽卡工作台前端：原生 ES Modules，零框架、零构建。
 import { api, jobStream, friendlyError } from './api.js';
 import { esc, cut, slotChips } from './detail.js';
+import {
+  parseFilterSpec, addFilter, removeFilter, filterChipsHtml, hotTagChipsHtml,
+  poolOptionsHtml, tagOptionsHtml, normalizeLoras, loraOptionsHtml, loraRowsHtml,
+  normalizeSlots, slotRowsHtml, slotPoolOptionsHtml,
+} from './widgets.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
@@ -15,6 +20,9 @@ const state = {
   gallery: { favorite: '', origin: '', min_rating: 0 },
   // 抽卡台表单值集中保存：重绘 / 切视图 / 刷新都不再丢失用户的选择
   form: { recipe_id: '', pulls: 3, count: 1, seed: '', filter: '', gen_profile_id: '' },
+  // 可选控件的编辑态：过滤构造器 / LoRA 列表 / 配方槽位表
+  filterPool: null, filterTagQ: '', tagOptions: [], hotTags: [],
+  loraDraft: [], slotsDraft: [],
 };
 
 let toastTimer = null;
@@ -81,10 +89,28 @@ function drawForm() {
         <div class="field"><span>每池条数</span><input type="number" id="dCount" value="${esc(f.count)}" min="1" max="20"></div>
         <div class="field"><span>种子</span><input type="number" id="dSeed" value="${esc(f.seed)}" placeholder="留空随机"></div>
       </div>
-      <div class="field" style="margin-top:10px"><span>按池过滤（可选，推荐写 角色:fate）</span>
-        <input type="text" id="dFilter" value="${esc(f.filter)}" placeholder="留空 = 全部；裸关键字会作用于所有卡池">
+      <div class="field picker" style="margin-top:14px">
+        <span>按池过滤 · 点选即可，无需打字</span>
+        <div class="row">
+          <select id="dFilterPool" style="flex:1;min-width:150px">${poolOptionsHtml(state.pools, state.filterPool)}</select>
+          <select id="dFilterTag" style="flex:1;min-width:130px">${tagOptionsHtml(state.tagOptions, '')}</select>
+          <button class="btn small primary" data-act="filter-add">＋ 添加</button>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <input type="text" id="dFilterTagQ" value="${esc(state.filterTagQ)}"
+            placeholder="找 tag：输入 2 个字自动联想（也可直接点下方热门）" style="max-width:280px">
+          <button class="btn small" data-act="filter-clear">清空条件</button>
+        </div>
+        <div class="hot-tags"><span class="hint">热门 tag · 点一下就加：</span>
+          <span id="hotTags">${hotTagChipsHtml(state.hotTags.slice(0, 12))}</span></div>
+        <div class="filter-chips" id="filterChips">${filterChipsHtml(f.filter)}</div>
         <div class="hint warn-text" id="filterHint" ${filterHintText() ? '' : 'hidden'}>${esc(filterHintText())}</div>
-        <div class="hint">写法：<code>角色:fate</code> 只筛角色池；<code>fate</code> 会筛掉所有不含 fate 的池（画师/动作槽位可能变空）。大小写不敏感。填了这里会<b>临时覆盖</b>配方槽位里的 filter；留空才按槽位 filter 抽。</div></div>
+        <details class="advanced">
+          <summary>高级：手动编辑过滤表达式 / 查看当前值</summary>
+          <input type="text" id="dFilter" value="${esc(f.filter)}" placeholder="留空 = 全部卡池">
+          <div class="hint">写法：<code>角色:fate</code> 只筛角色池；裸 <code>fate</code> 会筛掉所有不含它的池（画师/动作槽位可能变空）。大小写不敏感。填了过滤会<b>临时覆盖</b>配方槽位里的 filter；留空才按槽位 filter 抽。</div>
+        </details>
+      </div>
       <div class="field" style="margin-top:10px"><span>生成参数预设</span>
         <select id="dProfile"><option value="" ${sel('', f.gen_profile_id)}>（跟随配方 / 默认）</option>${profileOpts}</select></div>
       <div class="row" style="margin-top:14px">
@@ -124,6 +150,47 @@ function updateFilterHint() {
   el.hidden = !text;
 }
 
+// ---------------- 点选控件：数据加载与局部刷新 ----------------
+let tagTimer = null;
+async function loadTagOptions(pool = state.filterPool, q = '', debounce = false) {
+  if (debounce) {
+    clearTimeout(tagTimer);
+    tagTimer = setTimeout(() => loadTagOptions(pool, q), 250);
+    return;
+  }
+  const params = new URLSearchParams({ limit: '40' });
+  if (pool) params.set('pool', pool);
+  if (q) params.set('q', q);
+  try {
+    const d = await api.get('/api/pools/tag-suggest?' + params.toString());
+    state.tagOptions = d.items || [];
+    if (!q) state.hotTags = state.tagOptions;
+    syncTagControls();
+  } catch (_) { /* 候选加载失败不阻塞抽卡，高级模式仍可手填 */ }
+}
+
+function syncTagControls() {
+  const sel = $('#dFilterTag');
+  if (sel) sel.innerHTML = tagOptionsHtml(state.tagOptions, sel.value);
+  const hot = $('#hotTags');
+  if (hot) hot.innerHTML = hotTagChipsHtml(state.hotTags.slice(0, 12));
+  const chips = $('#filterChips');
+  if (chips) chips.innerHTML = filterChipsHtml(state.form.filter);
+  const dl = $('#slotTagList');
+  if (dl) dl.innerHTML = state.hotTags.map((x) =>
+    `<option value="${esc(x.value)}"></option>`).join('');
+}
+
+/** 构造器写回唯一的过滤表达式输入框，提示与提交逻辑完全复用原来的链路。 */
+function setFilterSpec(spec) {
+  state.form.filter = spec;
+  const el = $('#dFilter');
+  if (el) el.value = spec;
+  syncTagControls();
+  updateFilterHint();
+  sessionStorage.setItem(FORM_KEY, JSON.stringify({ ...state.form, filterPool: state.filterPool }));
+}
+
 /** 把抽卡台表单当前值同步进 state，任何重绘都不再丢失选择。 */
 function readDrawForm() {
   const get = (id) => $(id)?.value;
@@ -133,15 +200,23 @@ function readDrawForm() {
     count: num(get('#dCount'), 1), seed: get('#dSeed'),
     filter: get('#dFilter'), gen_profile_id: get('#dProfile'),
   };
-  sessionStorage.setItem(FORM_KEY, JSON.stringify(state.form));
+  const poolEl = $('#dFilterPool');
+  if (poolEl) state.filterPool = poolEl.value;
+  sessionStorage.setItem(FORM_KEY, JSON.stringify({ ...state.form, filterPool: state.filterPool }));
   updateFilterHint();
+  const chips = $('#filterChips');
+  if (chips) chips.innerHTML = filterChipsHtml(state.form.filter);
 }
 
 /** 刷新页面后连表单选择一起恢复，避免「刚填的过滤条件又没了」。 */
 function restoreForm() {
   try {
     const raw = sessionStorage.getItem(FORM_KEY);
-    if (raw) state.form = { ...state.form, ...JSON.parse(raw) };
+    if (raw) {
+      const saved = JSON.parse(raw);
+      state.form = { ...state.form, ...saved };
+      if (saved.filterPool !== undefined) state.filterPool = saved.filterPool;
+    }
   } catch (_) { /* 坏数据忽略，用默认表单 */ }
 }
 
@@ -262,16 +337,42 @@ function recipeForm() {
   return `<div class="field"><span>配方名</span><input type="text" id="rName" value="${esc(r?.name || '')}" placeholder="如 角色 × 风格"></div>
     <div class="field" style="margin-top:8px"><span>固定头部（质量词 / 主体）</span>
       <textarea id="rHead" style="min-height:56px">${esc(def.fixed_head || '')}</textarea></div>
-    <div class="field" style="margin-top:8px"><span>槽位 JSON（pool / count / weight / filter）</span>
-      <textarea id="rSlots" style="min-height:130px">${esc(JSON.stringify(def.slots || [], null, 2))}</textarea>
-      <div class="hint">槽位里的 <code>filter</code> 只在抽卡台「按池过滤」<b>留空</b>时生效；表单填了过滤会以表单为准。</div></div>
+    <div class="field picker" style="margin-top:12px"><span>槽位 · 点选配置，无需手写 JSON</span>
+      <div id="slotRows">${slotRowsHtml(state.slotsDraft, state.pools, state.hotTags)}</div>
+      <datalist id="slotTagList">${state.hotTags.map((x) =>
+        `<option value="${esc(x.value)}"></option>`).join('')}</datalist>
+      <div class="row" style="margin-top:8px">
+        <button class="btn small" data-act="slot-add">＋ 添加槽位</button>
+        <button class="btn small" data-act="slot-apply-json">读取下方 JSON</button></div>
+      <div class="hint">槽位里的 tag 过滤只在抽卡台「按池过滤」<b>留空</b>时生效；表单填了过滤会以表单为准。</div>
+      <details class="advanced"><summary>高级：直接编辑 / 粘贴槽位 JSON</summary>
+        <textarea id="rSlots" style="min-height:110px">${esc(JSON.stringify(state.slotsDraft, null, 2))}</textarea>
+        <div class="hint">改完点上方「读取下方 JSON」，保存时也会以这里的内容为准。</div></details>
+    </div>
     <div class="field" style="margin-top:8px"><span>模板（__池名__ / __池名#3__ / __池名~__）</span>
+      <div class="row" style="margin-bottom:6px">
+        <select id="rTplPool" style="max-width:280px">${slotPoolOptionsHtml(state.pools, '')}</select>
+        <button class="btn small" data-act="tpl-insert">插入 __池名__</button></div>
       <textarea id="rTpl" style="min-height:56px">${esc(def.template || '')}</textarea></div>
     <div class="field" style="margin-top:8px"><span>固定尾部</span>
       <input type="text" id="rTail" value="${esc(def.fixed_tail || '')}"></div>`;
 }
 
+/** 只重绘槽位区，避免整页重绘把配方名 / 模板里未保存的输入清掉。 */
+function refreshSlots() {
+  const box = $('#slotRows');
+  if (box) box.innerHTML = slotRowsHtml(state.slotsDraft, state.pools, state.hotTags);
+  const ta = $('#rSlots');
+  if (ta) ta.value = JSON.stringify(state.slotsDraft, null, 2);
+  const dl = $('#slotTagList');
+  if (dl) dl.innerHTML = state.hotTags.map((x) =>
+    `<option value="${esc(x.value)}"></option>`).join('');
+}
+
 async function renderRecipes() {
+  state.slotsDraft = normalizeSlots(
+    state.editingRecipe?.definition?.slots ??
+    [{ pool: '', count: 1, weight: 1, filter: '' }]);
   view.innerHTML = `<div class="grid-2">
     <div class="panel"><div class="panel-head"><h2>配方</h2>
       <button class="btn small" data-act="recipe-new">＋ 新建</button></div>
@@ -289,10 +390,16 @@ async function renderRecipes() {
 }
 
 function readRecipeForm() {
-  let slots;
-  try { slots = JSON.parse($('#rSlots').value || '[]'); }
-  catch (e) { throw new Error('槽位 JSON 格式不对：' + e.message); }
-  if (!Array.isArray(slots)) throw new Error('槽位必须是数组');
+  // 可视化表格与高级 JSON 始终同步；用户手动改过 JSON 时以 JSON 为准，方便粘贴旧配方。
+  let slots = normalizeSlots(state.slotsDraft);
+  const raw = $('#rSlots')?.value;
+  if (raw !== undefined) {
+    let parsed;
+    try { parsed = JSON.parse(raw || '[]'); }
+    catch (e) { throw new Error('槽位 JSON 格式不对：' + e.message); }
+    if (!Array.isArray(parsed)) throw new Error('槽位必须是数组');
+    slots = normalizeSlots(parsed);
+  }
   return {
     name: $('#rName').value.trim(),
     definition: {
@@ -386,12 +493,30 @@ function openLightbox(id) {
 }
 
 // ---------------- 设置 ----------------
+function refreshLoraRows() {
+  const box = $('#loraRows');
+  if (box) box.innerHTML = loraRowsHtml(state.loraDraft);
+  const pick = $('#pLoraPick');
+  if (pick) {
+    const keep = pick.value;
+    pick.innerHTML = loraOptionsHtml(state.models.loras || [], state.loraDraft);
+    pick.value = keep;
+  }
+}
+
 async function renderSettings() {
   try { state.models = await api.get('/api/comfy/models'); } catch (_) { state.models = {}; }
   const p = state.profiles[0] || {};
   const c = state.config;
+  state.loraDraft = normalizeLoras(p.loras || []);
   const models = (state.models.checkpoints || []).map((m) =>
     `<option value="${esc(m)}" ${m === p.checkpoint ? 'selected' : ''}>${esc(m)}</option>`).join('');
+  // 模型枚举来自 ComfyUI；当前预设值即使不在枚举里也保留，避免换机器后被迫改配置。
+  const opts = (list, cur) => {
+    const arr = (Array.isArray(list) ? list : []).map(String);
+    if (cur && !arr.includes(String(cur))) arr.unshift(String(cur));
+    return arr.map((v) => `<option value="${esc(v)}" ${String(v) === String(cur ?? '') ? 'selected' : ''}>${esc(v)}</option>`).join('');
+  };
   view.innerHTML = `<div class="grid-2">
     <div class="panel"><div class="panel-head"><h2>运行环境</h2>
       <button class="btn small" data-act="comfy-refresh">刷新状态</button></div>
@@ -415,9 +540,11 @@ async function renderSettings() {
     <div class="panel"><div class="panel-head"><h2>生成参数预设</h2>
       <span class="sub">保存后新抽卡会话生效</span></div>
       <div class="field"><span>预设名</span><input type="text" id="pName" value="${esc(p.name || '默认 SDXL')}"></div>
-      <div class="field" style="margin-top:8px"><span>Checkpoint（来自 ComfyUI /object_info）</span>
+      <div class="field" style="margin-top:8px"><span>Checkpoint · 点选，来自 ComfyUI /object_info</span>
         <select id="pCheckpoint"><option value="">（留空 = ComfyUI 默认）</option>${models}</select>
-        <input type="text" id="pCheckpointFree" placeholder="或手动填写 ckpt 文件名" value="${esc(p.checkpoint || '')}" style="margin-top:5px"></div>
+        <details class="advanced"><summary>手动填写 ckpt 文件名（一般不需要）</summary>
+          <input type="text" id="pCheckpointFree" placeholder="或手动填写 ckpt 文件名"
+            value="${esc(p.checkpoint || '')}"></details></div>
       <div class="row" style="margin-top:8px">
         <div class="field"><span>步数</span><input type="number" id="pSteps" value="${p.steps || 20}"></div>
         <div class="field"><span>CFG</span><input type="number" id="pCfg" step="0.5" value="${p.cfg || 6}"></div>
@@ -425,13 +552,23 @@ async function renderSettings() {
         <div class="field"><span>高</span><input type="number" id="pHeight" value="${p.height || 1360}"></div>
       </div>
       <div class="row" style="margin-top:8px">
-        <div class="field"><span>采样器</span><input type="text" id="pSampler" value="${esc(p.sampler || 'euler_ancestral')}"></div>
-        <div class="field"><span>调度器</span><input type="text" id="pScheduler" value="${esc(p.scheduler || 'normal')}"></div>
+        <div class="field"><span>采样器</span><select id="pSampler">${opts(state.models.samplers || [], p.sampler || 'euler_ancestral')}</select></div>
+        <div class="field"><span>调度器</span><select id="pScheduler">${opts(state.models.schedulers || [], p.scheduler || 'normal')}</select></div>
       </div>
       <div class="field" style="margin-top:8px"><span>负向提示词</span>
         <input type="text" id="pNegative" value="${esc(p.negative || '')}"></div>
-      <div class="field" style="margin-top:8px"><span>LoRA（JSON 数组，如 [{"name":"x.safetensors","weight":0.8}]）</span>
-        <textarea id="pLoras" style="min-height:56px">${esc(JSON.stringify(p.loras || []))}</textarea></div>
+      <div class="field picker" style="margin-top:12px"><span>LoRA · 点选文件 + 调权重，无需写 JSON</span>
+        <div class="row">
+          <select id="pLoraPick" style="flex:1;min-width:190px">${loraOptionsHtml(state.models.loras || [], state.loraDraft)}</select>
+          <label class="mini">权重<input type="number" id="pLoraWeight" value="0.8"
+            step="0.05" min="-4" max="4" style="width:86px"></label>
+          <button class="btn small primary" data-act="lora-add">＋ 添加</button>
+        </div>
+        <div id="loraRows" style="margin-top:8px">${loraRowsHtml(state.loraDraft)}</div>
+        <div class="hint">${(state.models.loras || []).length
+          ? '顺序即加载顺序，可用 ↑ ↓ 调整；权重同时作用于 model / clip。'
+          : '当前没有可用的 LoRA 文件（mock 模式或 ComfyUI 未加载 LoRA），可留空只用 checkpoint。'}</div>
+      </div>
       <div class="row" style="margin-top:12px"><button class="btn primary" data-act="profile-save">保存预设</button></div>
     </div></div>`;
 }
@@ -440,10 +577,27 @@ async function renderSettings() {
 async function onClick(e) {
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
-  const act = btn.dataset.act, id = Number(btn.dataset.id);
+  const act = btn.dataset.act, id = Number(btn.dataset.id), i = Number(btn.dataset.i);
   try {
     switch (act) {
       case 'draw': await doDraw(); break;
+      // --- 过滤构造器：全程点选，写回 #dFilter 让原有提交/提示链路不变 ---
+      case 'filter-add': {
+        // 搜索框里手打的优先于下拉选中项；加完清空并把候选恢复成热门。
+        const tag = $('#dFilterTagQ')?.value.trim() || $('#dFilterTag')?.value;
+        if (!tag) throw new Error('先选一个 tag，或点下方热门 tag');
+        setFilterSpec(addFilter(state.form.filter, state.filterPool, tag));
+        const q = $('#dFilterTagQ'); if (q) q.value = '';
+        state.filterTagQ = '';
+        loadTagOptions(state.filterPool, '');
+        done(`已添加过滤：${state.filterPool ? state.filterPool + ':' : ''}${tag}`); break;
+      }
+      case 'filter-hot':
+        setFilterSpec(addFilter(state.form.filter, state.filterPool, btn.dataset.v)); break;
+      case 'filter-del':
+        setFilterSpec(removeFilter(state.form.filter, i)); break;
+      case 'filter-clear':
+        setFilterSpec(''); break;
       case 'draw-clear':
         state.draws = []; state.session = null; state.warnings = [];
         sessionStorage.setItem(LAST_SESSION_KEY, '0');
@@ -496,6 +650,45 @@ async function onClick(e) {
           `<div class="chip" style="display:block;margin-bottom:6px">[${i + 1}] ${esc(cut(r.prompt, 220))}</div>`).join('');
         break;
       }
+      // --- 配方槽位：可视化表格，局部刷新避免清掉未保存的其它字段 ---
+      case 'slot-add':
+        state.slotsDraft.push({ pool: '', count: 1, weight: 1, filter: '' });
+        refreshSlots(); break;
+      case 'slot-del': state.slotsDraft.splice(i, 1); refreshSlots(); break;
+      case 'slot-up': case 'slot-down': {
+        const j = act === 'slot-up' ? i - 1 : i + 1;
+        if (j < 0 || j >= state.slotsDraft.length) break;
+        [state.slotsDraft[i], state.slotsDraft[j]] = [state.slotsDraft[j], state.slotsDraft[i]];
+        refreshSlots(); break;
+      }
+      case 'slot-apply-json': {
+        const parsed = JSON.parse($('#rSlots').value || '[]');
+        if (!Array.isArray(parsed)) throw new Error('槽位必须是数组');
+        state.slotsDraft = normalizeSlots(parsed);
+        refreshSlots(); done(`已读取 ${state.slotsDraft.length} 个槽位`); break;
+      }
+      case 'tpl-insert': {
+        const pool = $('#rTplPool')?.value;
+        if (!pool) throw new Error('先选一个卡池');
+        const ta = $('#rTpl');
+        ta.value = (ta.value ? ta.value.trimEnd() + ', ' : '') + `__${pool}__`;
+        done(`已插入 __${pool}__`); break;
+      }
+      // --- LoRA：下拉点选 + 权重行 ---
+      case 'lora-add': {
+        const name = $('#pLoraPick')?.value;
+        if (!name) throw new Error('先选一个 LoRA 文件');
+        const w = Number($('#pLoraWeight')?.value ?? 0.8);
+        state.loraDraft = normalizeLoras([...state.loraDraft, { name, weight: w }]);
+        refreshLoraRows(); done(`已添加 ${name}`); break;
+      }
+      case 'lora-del': state.loraDraft.splice(i, 1); refreshLoraRows(); break;
+      case 'lora-up': case 'lora-down': {
+        const j = act === 'lora-up' ? i - 1 : i + 1;
+        if (j < 0 || j >= state.loraDraft.length) break;
+        [state.loraDraft[i], state.loraDraft[j]] = [state.loraDraft[j], state.loraDraft[i]];
+        refreshLoraRows(); break;
+      }
       case 'view-retry': await onRoute(); break;
       case 'job-refresh': await renderJobs(); break;
       case 'job-cancel': await api.post(`/api/jobs/${id}/cancel`, {}); await renderJobs(); break;
@@ -537,15 +730,13 @@ async function onClick(e) {
         done(t ? '令牌已保存到本机浏览器' : '已清除令牌'); break;
       }
       case 'profile-save': {
-        let loras;
-        try { loras = JSON.parse($('#pLoras').value || '[]'); }
-        catch (err) { throw new Error('LoRA JSON 格式不对：' + err.message); }
-        const cp = $('#pCheckpointFree').value.trim() || $('#pCheckpoint').value;
+        const loras = normalizeLoras(state.loraDraft);
+        const cp = $('#pCheckpointFree')?.value.trim() || $('#pCheckpoint').value;
         await api.post('/api/gen-profiles', {
           name: $('#pName').value.trim(), checkpoint: cp, loras,
           steps: num($('#pSteps').value, 20), cfg: num($('#pCfg').value, 6),
           width: num($('#pWidth').value, 1024), height: num($('#pHeight').value, 1360),
-          sampler: $('#pSampler').value.trim(), scheduler: $('#pScheduler').value.trim(),
+          sampler: $('#pSampler').value, scheduler: $('#pScheduler').value,
           negative: $('#pNegative').value, workflow: 'sdxl_minimal.json',
         });
         state.profiles = await api.get('/api/gen-profiles');
@@ -581,6 +772,26 @@ function onInput(e) {
   if (['dRecipe', 'dPulls', 'dCount', 'dSeed', 'dFilter', 'dProfile'].includes(t.id)) {
     readDrawForm();
   }
+  if (t.id === 'dFilterTagQ') {
+    state.filterTagQ = t.value;
+    loadTagOptions(state.filterPool, t.value.trim(), true);
+  }
+  // 槽位表格：只更新草稿与高级 JSON，不重绘（避免输入框失焦）
+  if (t.dataset.slot) {
+    const idx = Number(t.dataset.i), key = t.dataset.slot;
+    let v = t.value;
+    if (key === 'count' || key === 'weight') v = Number(v);
+    if (state.slotsDraft[idx]) {
+      state.slotsDraft[idx] = { ...state.slotsDraft[idx], [key]: v };
+      const ta = $('#rSlots');
+      if (ta) ta.value = JSON.stringify(state.slotsDraft, null, 2);
+    }
+  }
+  // LoRA 权重：同样不重绘，保留数字输入的光标
+  if (t.dataset.loraW !== undefined) {
+    const idx = Number(t.dataset.loraW), w = Number(t.value);
+    if (state.loraDraft[idx] && Number.isFinite(w)) state.loraDraft[idx].weight = w;
+  }
   if (t.id?.startsWith('prompt_')) {
     const d = state.draws.find((x) => x.id === Number(t.id.slice(7)));
     if (d) d.prompt = t.value;   // 切视图重绘时不丢编辑内容
@@ -596,7 +807,32 @@ function onChange(e) {
     };
     renderGallery().catch(fail);
   }
-  if (t.id === 'pCheckpoint') $('#pCheckpointFree').value = t.value;
+  if (t.id === 'dFilterPool') {
+    state.filterPool = t.value;
+    readDrawForm();
+    loadTagOptions(state.filterPool, state.filterTagQ.trim());
+  }
+  if (t.id === 'dFilterTag' && t.value) {
+    // 选中即添加：用户不必再点一次按钮
+    setFilterSpec(addFilter(state.form.filter, state.filterPool, t.value));
+    t.value = '';
+    const q = $('#dFilterTagQ');
+    if (q) q.value = '';
+    state.filterTagQ = '';
+    loadTagOptions(state.filterPool, '');
+  }
+  if (t.dataset.slot && t.tagName === 'SELECT') {
+    const idx = Number(t.dataset.i);
+    if (state.slotsDraft[idx]) {
+      state.slotsDraft[idx] = { ...state.slotsDraft[idx], pool: t.value };
+      const ta = $('#rSlots');
+      if (ta) ta.value = JSON.stringify(state.slotsDraft, null, 2);
+    }
+  }
+  if (t.id === 'pCheckpoint') {
+    const free = $('#pCheckpointFree');
+    if (free) free.value = t.value;
+  }
 }
 
 function startStream() {
@@ -627,6 +863,12 @@ async function boot() {
   try {
     restoreForm();
     await refreshBase();
+    // 首次进入默认给最常用的「角色」类别，避免点热门 tag 时生成裸关键字触发全局过滤；
+    // 用户明确选过「全部卡池」后存的是 ''，不会被这里覆盖。
+    if (state.filterPool === null) {
+      state.filterPool = state.pools.some((p) => p.kind === '角色') ? '角色' : '';
+    }
+    await loadTagOptions();
     await restoreLastDraw();
     startStream();
     await onRoute();
