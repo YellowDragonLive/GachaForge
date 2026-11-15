@@ -2,6 +2,7 @@
 """配方 / 参数预设 / 抽卡会话服务。业务规则在这里，不接触 HTTP 对象。"""
 from __future__ import annotations
 
+import copy
 import json
 import random
 from typing import Any
@@ -138,14 +139,27 @@ def create_session(db: Session, params: dict) -> dict:
         recipe_def = params.get("definition") or {}
         profile_id = params.get("gen_profile_id")
     profile = resolve_profile(db, profile_id)
+    filter_spec = str(params.get("filter") or "").strip()
+
+    # 会话级表单过滤优先于配方槽位里写死的 filter：两层做 AND 时，
+    # 用户填「角色:asuna」会被槽位残留的 filter:fate 全部筛掉，且极难自查。
+    # 这里只改本次执行用的副本（快照如实记录被覆盖后的定义），不改数据库里的配方。
+    overridden_filters: list[str] = []
+    if recipe_def and filter_spec:
+        recipe_def = copy.deepcopy(recipe_def)
+        for slot in recipe_def.get("slots") or []:
+            if str(slot.get("filter") or "").strip():
+                overridden_filters.append(f"{slot.get('pool')}={slot['filter']}")
+                slot["filter"] = ""
 
     all_pools = pool_svc.pools_for_draw(db, params.get("pool_slugs") or None)
     if not all_pools:
         raise ConflictError("没有可用的卡池，请先在「卡池管理」导入或启用卡池")
-    selected = pick_pools(all_pools, params.get("pool_slugs") or "")
-    selected = apply_filter_spec(selected, params.get("filter", ""))
+    raw_selected = pick_pools(all_pools, params.get("pool_slugs") or "")
+    selected = apply_filter_spec(raw_selected, filter_spec)
     if not selected:
         raise ConflictError("过滤后没有任何可用条目")
+    removed_pools = len(raw_selected) - len(selected)
 
     seed = params.get("seed")
     pulls = int(params.get("pulls", 3))
@@ -193,8 +207,30 @@ def create_session(db: Session, params: dict) -> dict:
         db.flush()
         rows.append({"id": row.id, **c})
     db.commit()
+
+    # 裸关键字会作用于全部卡池，配方槽位因此静默变空是本次用户故障的根因。
+    # 这里把「为什么少了槽位」显式回给前端，而不是让用户自己猜。
+    empty_slots = sorted({str(x["slot"]) for c in cards
+                          for x in c["detail"] if x.get("empty")})
+    bare_kws = [p.strip() for p in filter_spec.split(",")
+                if p.strip() and ":" not in p and "：" not in p]
+    warnings: list[str] = []
+    if bare_kws and recipe_def:
+        warnings.append(
+            f"「按池过滤」里的裸关键字 {'、'.join(bare_kws)} 会作用于全部卡池："
+            f"本次移除了 {removed_pools} 个无匹配条目的池，配方槽位可能因此变空。"
+            "只想筛某个池请写「角色:fate」，或留空让配方槽位自己的 filter 生效。")
+    if overridden_filters:
+        warnings.append(
+            f"表单过滤 '{filter_spec}' 本次优先，已临时覆盖配方槽位自带的 filter"
+            f"（{'、'.join(overridden_filters)}）；想按槽位 filter 抽请把表单留空。")
+    if empty_slots:
+        warnings.append("本次没有抽到内容的槽位：" + "、".join(empty_slots) +
+                        "（原因见卡片里的 ⚠ 标记）")
+
     return {"session_id": session.id, "seed": seed, "recipe": recipe_def,
-            "profile": profile, "pool_count": len(selected), "draws": rows}
+            "profile": profile, "pool_count": len(selected),
+            "filter": filter_spec, "warnings": warnings, "draws": rows}
 
 
 def get_session(db: Session, session_id: int) -> dict:

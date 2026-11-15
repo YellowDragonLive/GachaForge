@@ -66,15 +66,24 @@ def run_recipe(recipe: dict[str, Any], all_pools: list[PoolData], rng) -> dict:
         parts.append(head)
         detail.append({"slot": "fixed_head", "tags": [head]})
     for slot in recipe.get("slots") or []:
+        name = slot.get("pool")
         if rng.random() > float(slot.get("weight", 1.0)):
-            detail.append({"slot": slot.get("pool"), "skipped": True, "tags": []})
+            detail.append({"slot": name, "skipped": True, "tags": []})
             continue
-        pools = apply_filter_spec(resolve_pools(slot.get("pool", ""), all_pools),
+        pools = apply_filter_spec(resolve_pools(name or "", all_pools),
                                   slot.get("filter", ""))
         tags = draw_tags(rng, pools, int(slot.get("count", 1) or 1))
         if tags:
             parts.extend(tags)
-            detail.append({"slot": slot.get("pool"), "tags": tags})
+            detail.append({"slot": name, "tags": tags})
+        else:
+            # 空槽位必须留痕，否则「按池过滤」把池筛掉时用户只看到槽位莫名消失。
+            detail.append({
+                "slot": name, "tags": [], "empty": True,
+                "reason": ("未找到匹配卡池（很可能被抽卡设置里的全局过滤移除）"
+                           if not pools else
+                           "池内无匹配条目（检查表单「按池过滤」的关键字）"),
+            })
     tpl = recipe.get("template") or ""
     if tpl:
         text = expand_template(tpl, all_pools, rng)

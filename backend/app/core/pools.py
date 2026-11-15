@@ -137,8 +137,14 @@ def pick_pools(all_pools: list[PoolData], spec: str | list[str]) -> list[PoolDat
 def filter_pool(pool: PoolData, keywords: list[str]) -> PoolData:
     if not keywords:
         return pool
+    # 大小写不敏感：界面示例写的是「角色:Fate」，条目里多为小写 fate，
+    # 旧实现会让照着示例填的用户直接得到「过滤后没有任何可用条目」。
+    kws = [str(k).strip().lower() for k in keywords if str(k).strip()]
+    if not kws:
+        return pool
     kept = [it for it in pool.items
-            if any(kw in it.label or kw in it.tags for kw in keywords)]
+            if any(k in (it.label or "").lower() or k in (it.tags or "").lower()
+                   for k in kws)]
     return PoolData(pool.name, pool.friendly, pool.source, kept)
 
 
