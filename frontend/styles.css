@@ -51,17 +51,16 @@ nav button.active { background: var(--primary-soft); color: var(--primary); }
 .draw-main .cards { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
 .draw-main > .panel-head { margin: 4px 0 12px; }
 
-/* 概念探索是可选增强：收起时只留一行摘要，不再把设置和结果挤出首屏 */
-.explore { padding: 0; margin-top: 16px; }
-.draw-main > .panel + .explore { margin-top: 16px; }
-.explore > summary { display: flex; align-items: center; gap: 12px;
-  padding: 13px 16px; cursor: pointer; list-style: none; user-select: none; }
-.explore > summary::-webkit-details-marker { display: none; }
-.explore > summary::before { content: '▸'; color: var(--primary); font-size: 14px; }
-.explore[open] > summary::before { content: '▾'; }
-.explore > summary:hover { color: var(--primary); }
-.explore > summary .sub { flex: 1; }
-.explore-body { padding: 2px 16px 16px; border-top: 1px solid var(--line); }
+/* 过滤面板：三种输入方式（池/tag、概念图、自然语言）共用一块，避免设置与探索脱节 */
+.filter-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.filter-tabs .chip { font-size: 11px; }
+.concept-wall.tight { grid-template-columns: 1fr; max-height: 300px;
+  overflow: auto; margin-top: 8px; padding-right: 2px; }
+.draw-side .semantic-bar input, .draw-side .concept-bar input { flex: 1 1 100%; min-width: 0; }
+/* 参数预设就地调参：抽屉长在设置栏里，保存即应用，不用跳设置页 */
+.tune-box { margin-top: 10px; padding: 10px; border: 1px dashed var(--line);
+  border-radius: 8px; background: var(--surface-2); }
+.tune-box .field { min-width: 0; }
 @media (max-width: 1080px) {
   .draw-shell { grid-template-columns: 1fr; }
   .draw-side { position: static; max-height: none; overflow: visible; }

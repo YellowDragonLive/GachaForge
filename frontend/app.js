@@ -22,16 +22,17 @@ const state = {
   currentView: 'draw', route: 'draw', editingRecipe: null, openPool: null,
   // 结果卡片内联状态：draw_id → 最新任务 / 已出图片（抽完即看，不必跳任务队列或画廊）
   drawJobs: {}, drawImages: {},
+  // 参数预设就地编辑：高频调参不再占一个一级页面
+  tuning: false, tuneDraft: null,
   gallery: { favorite: '', origin: '', min_rating: 0 },
   // 抽卡台表单值集中保存：重绘 / 切视图 / 刷新都不再丢失用户的选择
-  form: { recipe_id: '', pulls: 3, count: 1, seed: '', filter: '', gen_profile_id: '' },
+  form: { recipe_id: '', pulls: 3, count: 1, seed: '', filter: '',
+    gen_profile_id: '', filterMode: 'pool' },
   // 可选控件的编辑态：过滤构造器 / LoRA 列表 / 配方槽位表
   filterPool: null, filterTagQ: '', tagOptions: [], hotTags: [],
   loraDraft: [], slotsDraft: [],
   // 概念缩略图：数据库驱动的概念墙 + 本地语义检索（索引未构建时静默降级）
   concepts: { items: [], kinds: [], kind: '', q: '', image_count: 0, loaded: false },
-  // 概念探索面板的展开状态：整页重绘（抽卡 / 切视图）后不复位
-  conceptsExpanded: true,
   semantics: { ready: null, reason: '', items: [], q: '', mode: '' },
   conceptThumbMap: {},
   // 封面按需加载：按概念 key 缓存，新图产出后整体失效
@@ -89,6 +90,8 @@ async function refreshStatusOnly() {
 // ---------------- 抽卡台 ----------------
 function drawForm() {
   const f = state.form;
+  // 过滤的三种入口（池/tag、概念图、自然语言）共用同一块面板，避免互相滚到对角
+  const mode = ['pool', 'concept', 'feel'].includes(f.filterMode) ? f.filterMode : 'pool';
   const sel = (a, b) => String(a ?? '') === String(b ?? '') ? 'selected' : '';
   const recipeOpts = state.recipes.map((r) =>
     `<option value="${r.id}" ${sel(r.id, f.recipe_id)}>${esc(r.name)}</option>`).join('');
@@ -107,21 +110,22 @@ function drawForm() {
         <div class="field"><span>种子</span><input type="number" id="dSeed" value="${esc(f.seed)}" placeholder="留空随机"></div>
       </div>
       <div class="field picker" style="margin-top:14px">
-        <span>按池过滤 · 点选即可，无需打字</span>
-        <div class="row">
-          <select id="dFilterPool" style="flex:1;min-width:150px">${poolOptionsHtml(state.pools, state.filterPool)}</select>
-          <select id="dFilterTag" style="flex:1;min-width:130px">${tagOptionsHtml(state.tagOptions, '')}</select>
-          <button class="btn small primary" data-act="filter-add">＋ 添加</button>
+        <span>过滤 · 点选即可，无需打字</span>
+        <div class="filter-tabs">
+          <button type="button" class="chip hot${mode === 'pool' ? ' on' : ''}"
+            data-act="filter-mode" data-v="pool">按池 / tag</button>
+          <button type="button" class="chip hot${mode === 'concept' ? ' on' : ''}"
+            data-act="filter-mode" data-v="concept">看图选概念</button>
+          <button type="button" class="chip hot${mode === 'feel' ? ' on' : ''}"
+            data-act="filter-mode" data-v="feel">一句话找画师</button>
         </div>
-        <div class="row" style="margin-top:6px">
-          <input type="text" id="dFilterTagQ" value="${esc(state.filterTagQ)}"
-            placeholder="找 tag：输入 2 个字自动联想（也可直接点下方热门）" style="max-width:280px">
-          <button class="btn small" data-act="filter-clear">清空条件</button>
-        </div>
-        <div class="hot-tags"><span class="hint">热门 tag · 点一下就加：</span>
-          <span id="hotTags">${hotTagChipsHtml(state.hotTags.slice(0, 12))}</span></div>
+        ${filterPaneHtml(mode)}
         <div class="filter-chips" id="filterChips">${filterChipsHtml(f.filter)}</div>
-        <div class="hint warn-text" id="filterHint" ${filterHintText() ? '' : 'hidden'}>${esc(filterHintText())}</div>
+        <div id="filterHintBox">${filterHintBoxHtml()}</div>
+        <div class="row" style="margin-top:6px">
+          <button class="btn small" data-act="filter-clear">清空条件</button>
+          <span class="hint">已选条件在上方，点 × 删除</span>
+        </div>
         <details class="advanced">
           <summary>高级：手动编辑过滤表达式 / 查看当前值</summary>
           <input type="text" id="dFilter" value="${esc(f.filter)}" placeholder="留空 = 全部卡池">
@@ -129,7 +133,12 @@ function drawForm() {
         </details>
       </div>
       <div class="field" style="margin-top:10px"><span>生成参数预设</span>
-        <select id="dProfile"><option value="" ${sel('', f.gen_profile_id)}>（跟随配方 / 默认）</option>${profileOpts}</select></div>
+        <div class="row">
+          <select id="dProfile" style="flex:1;min-width:120px"><option value="" ${sel('', f.gen_profile_id)}>（跟随配方 / 默认）</option>${profileOpts}</select>
+          <button class="btn small" data-act="tune-open">${state.tuning ? '收起调参' : '调参'}</button>
+        </div>
+        ${state.tuning ? tuningHtml() : ''}
+      </div>
       <div class="row" style="margin-top:14px">
         <button class="btn primary" style="flex:1" data-act="draw-and-gen">抽卡并生图</button>
         <button class="btn" data-act="draw">只抽卡</button>
@@ -147,8 +156,7 @@ function drawForm() {
       ${state.draws.length ? `<div class="panel-head"><h2>本批结果 · ${state.draws.length} 抽</h2>
         <span class="sub">会话 #${state.session?.session_id ?? '-'} · seed ${esc(state.session?.seed ?? '随机')}</span></div>
         <div class="cards">${state.draws.map(drawCard).join('')}</div>` :
-        `<div class="panel"><div class="loading">选好配方后点「抽 卡」，结果会显示在这里。</div></div>`}
-      ${conceptPanel()}
+        `<div class="panel"><div class="loading">调好参数后点「抽卡并生图」，抽到的图和生成进度都会出现在这里。</div></div>`}
     </section>
   </div>`;
 }
@@ -171,17 +179,57 @@ function filterHintText() {
   if (missing.length) {
     notes.push(`ℹ ${missing.map((r) => `${r.pool}:${r.tag}`).join('、')} ` +
       '在当前配方里没有对应槽位：抽卡时会自动补一个槽位，把所选 tag 写进 prompt；' +
-      '想固定下来可在「配方编辑器」里加上这个槽位。');
+      '点下面「把缺的槽位加进配方」可固定下来，下次不用再补。');
   }
   return notes.join('　');
 }
 
 function updateFilterHint() {
-  const el = $('#filterHint');
-  if (!el) return;
+  const box = $('#filterHintBox');
+  if (box) box.innerHTML = filterHintBoxHtml();
+}
+
+/** 当前配方缺哪些槽位：缺得掉就顺手给一个「加进配方」的按钮。 */
+function missingSlots() {
+  const f = state.form;
+  if (!f.recipe_id) return [];
+  const recipe = state.recipes.find((r) => String(r.id) === String(f.recipe_id));
+  return missingFilterSlots(f.filter, recipe, state.pools);
+}
+
+function filterHintBoxHtml() {
   const text = filterHintText();
-  el.textContent = text;
-  el.hidden = !text;
+  const fixable = missingSlots().length > 0;
+  if (!text && !fixable) return '';
+  return `${text ? `<div class="hint warn-text" id="filterHint">${esc(text)}</div>` : ''}
+    ${fixable ? '<button class="btn small" data-act="fix-recipe">把缺的槽位加进配方</button>' : ''}`;
+}
+
+/** 把「配方没有对应槽位」的条件一步固定进配方：不用跳配方编辑器再手动选一遍池。 */
+async function addFilterToRecipe() {
+  const rid = Number(state.form.recipe_id);
+  if (!rid) throw new Error('先选一个配方（或改成全池随机）才能固定槽位');
+  const recipe = state.recipes.find((r) => Number(r.id) === rid);
+  if (!recipe) throw new Error('配方已不存在，请刷新页面');
+  const missing = missingFilterSlots(state.form.filter, recipe, state.pools);
+  if (!missing.length) { done('当前配方槽位已覆盖这些条件'); return; }
+  const def = JSON.parse(JSON.stringify(recipe.definition || {}));
+  def.slots = Array.isArray(def.slots) ? def.slots : [];
+  const added = [];
+  for (const m of missing) {
+    if (def.slots.some((s) => String(s.pool) === String(m.pool))) continue;
+    def.slots.push({ pool: m.pool, count: 1, weight: 1, filter: m.tag });
+    added.push(m.pool);
+  }
+  await api.put('/api/recipes/' + rid, {
+    name: recipe.name,
+    definition: def,
+    // 必须带回原有的参数预设关联，否则后端会把它置空
+    gen_profile_id: recipe.gen_profile_id ?? null,
+  });
+  state.recipes = await api.get('/api/recipes');
+  done(`已加进配方「${recipe.name}」：${added.join('、')}`);
+  updateFilterHint();
 }
 
 // ---------------- 通用概念缩略图：抽卡时先看图再选 ----------------
@@ -197,34 +245,145 @@ function semanticHintHtml() {
   return '';
 }
 
-function conceptPanel() {
-  const c = state.concepts;
-  const selectedKeys = parseFilterSpec(state.form.filter).map((r) => r.tag.toLowerCase());
-  const feels = FEEL_PRESETS.map((f) =>
-    `<button type="button" class="chip hot" data-act="feel-chip" data-v="${esc(f)}">${esc(f)}</button>`).join('');
-  return `<details class="panel explore" id="explorePanel" ${state.conceptsExpanded ? 'open' : ''}>
-    <summary class="explore-sum"><h2>看图选概念</h2>
-      <span class="sub">悬浮看一张代表图 · 点概念名看全部（首屏 50 张）· 点卡片加入过滤 · ${c.image_count} 张历史图</span></summary>
-    <div class="explore-body">
-    <div class="semantic-bar">
-      <input type="text" id="semanticQ" value="${esc(state.semantics.q)}"
-        placeholder="想要的感觉：一句话描述画风，本地语义检索（可留空）">
-      <button class="btn small primary" data-act="semantic-go">找画师</button>
-      <button class="btn small" data-act="semantic-clear">清空</button>
-    </div>
-    <div class="hot-tags"><span class="hint">试着点一个：</span>${feels}</div>
-    <div id="semanticHint">${semanticHintHtml()}</div>
-    <div id="semanticCards">${semanticCardsHtml(state.semantics.items)}</div>
-    <div class="concept-bar">
-      <span class="hint">数据库里抽过的概念</span>
-      <input type="text" id="conceptQ" value="${esc(c.q)}"
-        placeholder="搜概念名（也可留空浏览）" style="max-width:240px">
+/** 过滤面板的三条输入路径：按池 / tag、看图选概念、一句话找画师。
+ *  三者最终都写同一条过滤表达式，所以放在同一块面板里——选完主按钮就在下面几十像素，
+ *  不用像之前那样在「左栏顶部过滤」和「右栏底部概念墙」之间来回滚。 */
+function filterPaneHtml(mode) {
+  const f = state.form;
+  if (mode === 'concept') {
+    const c = state.concepts;
+    const selectedKeys = parseFilterSpec(f.filter).map((r) => r.tag.toLowerCase());
+    return `<div class="concept-bar">
+      <input type="text" id="conceptQ" value="${esc(c.q)}" placeholder="搜概念名（留空浏览）">
       <button class="btn small" data-act="concept-refresh">刷新</button>
     </div>
     <div class="hot-tags" id="conceptKinds">${conceptKindChipsHtml(c.kinds, c.kind)}</div>
-    <div id="conceptWall">${conceptCardsHtml(c.items.slice(0, 12), { selectedKeys })}</div>
+    <div id="conceptWall" class="concept-wall tight">${conceptCardsHtml(c.items.slice(0, 8), { selectedKeys })}</div>
+    <div class="hint">悬浮看一张代表图 · 点卡片加入过滤 · 点概念名看全部（首屏 50 张）· ${c.image_count} 张历史图</div>`;
+  }
+  if (mode === 'feel') {
+    const feels = FEEL_PRESETS.map((x) =>
+      `<button type="button" class="chip hot" data-act="feel-chip" data-v="${esc(x)}">${esc(x)}</button>`).join('');
+    return `<div class="semantic-bar">
+      <input type="text" id="semanticQ" value="${esc(state.semantics.q)}"
+        placeholder="想要的感觉：一句话描述画风">
+      <button class="btn small primary" data-act="semantic-go">找画师</button>
     </div>
-  </details>`;
+    <div class="hot-tags"><span class="hint">试着点一个：</span>${feels}</div>
+    <div id="semanticHint">${semanticHintHtml()}</div>
+    <div id="semanticCards">${semanticCardsHtml(state.semantics.items)}</div>`;
+  }
+  return `<div class="row">
+      <select id="dFilterPool" style="flex:1;min-width:108px">${poolOptionsHtml(state.pools, state.filterPool)}</select>
+      <select id="dFilterTag" style="flex:1;min-width:100px">${tagOptionsHtml(state.tagOptions, '')}</select>
+      <button class="btn small primary" data-act="filter-add">＋ 添加</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <input type="text" id="dFilterTagQ" value="${esc(state.filterTagQ)}"
+        placeholder="找 tag：输入 2 个字自动联想" style="width:100%">
+    </div>
+    <div class="hot-tags"><span class="hint">热门 tag · 点一下就加：</span>
+      <span id="hotTags">${hotTagChipsHtml(state.hotTags.slice(0, 12))}</span></div>`;
+}
+
+/** 切换过滤输入方式：重绘面板即可，过滤表达式本身不变。 */
+async function setFilterMode(mode) {
+  if (!['pool', 'concept', 'feel'].includes(mode)) return;
+  state.form.filterMode = mode;
+  sessionStorage.setItem(FORM_KEY,
+    JSON.stringify({ ...state.form, filterPool: state.filterPool }));
+  await renderDraw();
+  if (mode === 'concept' && !state.concepts.loaded) await loadConcepts();
+}
+
+// ---------------- 参数预设就地调参 ----------------
+const SAMPLERS = ['euler_ancestral', 'euler', 'dpmpp_2m', 'dpmpp_2m_sde',
+  'dpmpp_sde', 'ddim', 'uni_pc'];
+const SCHEDULERS = ['normal', 'karras', 'exponential', 'sgm_uniform',
+  'simple', 'ddim_uniform'];
+
+/** 展开前先把当前选中的预设读进草稿，避免打开就看到空表单。 */
+async function openTuning() {
+  if (state.tuning) { state.tuning = false; await renderDraw(); return; }
+  if (!Array.isArray(state.models.checkpoints) || !state.models.checkpoints.length) {
+    try { state.models = await api.get('/api/comfy/models'); } catch (_) { /* 离线时退回手填值 */ }
+  }
+  const pid = Number(state.form.gen_profile_id) || null;
+  const p = state.profiles.find((x) => Number(x.id) === pid) || state.profiles[0] || {};
+  state.tuneDraft = {
+    name: p.name || '默认参数',
+    checkpoint: p.checkpoint || '',
+    steps: p.steps ?? 20, cfg: p.cfg ?? 6,
+    width: p.width ?? 1024, height: p.height ?? 1360,
+    sampler: p.sampler || 'euler_ancestral',
+    scheduler: p.scheduler || 'normal',
+    negative: p.negative || 'worst quality, low quality',
+    loras: Array.isArray(p.loras) ? p.loras : [],
+    workflow: p.workflow || 'sdxl_minimal.json',
+  };
+  state.tuning = true;
+  await renderDraw();
+}
+
+function tuningHtml() {
+  const t = state.tuneDraft || {};
+  const cks = state.models.checkpoints || [];
+  const ckOpts = (cks.length ? cks : (t.checkpoint ? [t.checkpoint] : []))
+    .map((m) => `<option value="${esc(m)}" ${m === t.checkpoint ? 'selected' : ''}>${esc(m)}</option>`)
+    .join('');
+  const opt = (list, cur) => list.map((v) =>
+    `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
+  return `<div class="tune-box">
+    <div class="field"><span>保存为预设名</span>
+      <input type="text" id="tName" value="${esc(t.name || '默认参数')}"></div>
+    <div class="field" style="margin-top:8px"><span>checkpoint</span>
+      <select id="tCheckpoint">${ckOpts || '<option value="">（未读到模型列表，可先去设置页刷新）</option>'}</select></div>
+    <div class="row" style="margin-top:8px">
+      <div class="field"><span>步数</span><input type="number" id="tSteps" value="${esc(t.steps)}" min="1" max="150"></div>
+      <div class="field"><span>CFG</span><input type="number" id="tCfg" value="${esc(t.cfg)}" step="0.5" min="0" max="30"></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div class="field"><span>宽</span><input type="number" id="tWidth" value="${esc(t.width)}" min="64" max="4096"></div>
+      <div class="field"><span>高</span><input type="number" id="tHeight" value="${esc(t.height)}" min="64" max="4096"></div>
+    </div>
+    <div class="field" style="margin-top:8px"><span>采样器</span>
+      <select id="tSampler">${opt(SAMPLERS, t.sampler)}</select></div>
+    <div class="field" style="margin-top:8px"><span>调度器</span>
+      <select id="tScheduler">${opt(SCHEDULERS, t.scheduler)}</select></div>
+    <div class="field" style="margin-top:8px"><span>负向提示词</span>
+      <textarea id="tNegative" style="min-height:48px">${esc(t.negative || '')}</textarea></div>
+    <div class="hint">LoRA 仍在「设置」里调（列表太长，放这里会挤掉抽卡按钮）；当前已启用 ${(t.loras || []).length} 个。</div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn small primary" data-act="tune-save">保存并应用</button>
+    </div>
+  </div>`;
+}
+
+/** 保存后立刻把表单指向这个预设，下一批抽卡就用新参数。 */
+async function saveTuning() {
+  const t = state.tuneDraft || {};
+  const body = {
+    name: $('#tName').value.trim() || t.name,
+    checkpoint: $('#tCheckpoint').value || t.checkpoint,
+    // loras / workflow 必须带回：后端 upsert 会整体覆盖，漏传等于清空
+    loras: t.loras || [],
+    steps: num($('#tSteps').value, 20),
+    cfg: num($('#tCfg').value, 6),
+    width: num($('#tWidth').value, 1024),
+    height: num($('#tHeight').value, 1360),
+    sampler: $('#tSampler').value,
+    scheduler: $('#tScheduler').value,
+    negative: $('#tNegative').value,
+    workflow: t.workflow || 'sdxl_minimal.json',
+  };
+  const saved = await api.post('/api/gen-profiles', body);
+  state.profiles = await api.get('/api/gen-profiles');
+  state.form.gen_profile_id = String(saved.id);
+  state.tuning = false;
+  sessionStorage.setItem(FORM_KEY,
+    JSON.stringify({ ...state.form, filterPool: state.filterPool }));
+  await renderDraw();
+  done(`参数已保存并应用：${saved.name} · ${saved.steps} 步 / CFG ${saved.cfg}`);
 }
 
 function syncConceptPanel() {
@@ -885,7 +1044,10 @@ async function onClick(e) {
     switch (act) {
       case 'draw-and-gen': await doDraw({ generate: true }); break;
       case 'draw': await doDraw(); break;
-      // --- 过滤构造器：全程点选，写回 #dFilter 让原有提交/提示链路不变 ---
+      // --- 过滤构造器：三种输入方式共用一条表达式，全程点选 ---
+      case 'filter-mode': await setFilterMode(btn.dataset.v); break;
+      case 'tune-open': await openTuning(); break;
+      case 'tune-save': await saveTuning(); break;
       case 'filter-add': {
         // 搜索框里手打的优先于下拉选中项；加完清空并把候选恢复成热门。
         const tag = $('#dFilterTagQ')?.value.trim() || $('#dFilterTag')?.value;
@@ -902,6 +1064,7 @@ async function onClick(e) {
         setFilterSpec(removeFilter(state.form.filter, i)); break;
       case 'filter-clear':
         setFilterSpec(''); syncConceptPanel(); break;
+      case 'fix-recipe': await addFilterToRecipe(); break;
       // --- 通用概念缩略图：点图即选，沿用已有过滤构造器 ---
       case 'concept-pick':
         setFilterSpec(addFilter(state.form.filter, btn.dataset.pool || '', btn.dataset.v));
@@ -1265,10 +1428,6 @@ async function boot() {
   view.addEventListener('mouseout', onCoverOut);
   view.addEventListener('focusin', onCoverOver);
   view.addEventListener('focusout', onCoverOut);
-  // <details> 的 toggle 不冒泡，用捕获阶段记住展开状态，抽卡重绘后不复位
-  view.addEventListener('toggle', (e) => {
-    if (e.target && e.target.id === 'explorePanel') state.conceptsExpanded = e.target.open;
-  }, true);
   document.querySelectorAll('#nav button').forEach((b) =>
     b.addEventListener('click', () => { location.hash = '#' + b.dataset.view; }));
   window.addEventListener('hashchange', onRoute);

@@ -322,7 +322,8 @@ const cases = [
     for (const needle of [
       'conceptCardsHtml(', 'conceptKindChipsHtml(', 'semanticCardsHtml(',
       'conceptStripHtml(', 'coverPopoverHtml(', 'conceptDetailHtml(',
-      'function conceptPanel()', 'function loadConcepts(',
+      'function filterPaneHtml(', 'function setFilterMode(',
+      'function loadConcepts(',
       'function loadSemantics(', 'function syncConceptPanel()',
       'function showCover(', 'function hideCover(', 'function onCoverOver(',
       'function renderConceptPage(', "raw.startsWith('concept/')",
@@ -354,20 +355,23 @@ const cases = [
     assert.deepEqual(W.missingFilterSlots('', recipe, pools), []);
     assert.deepEqual(W.missingFilterSlots('fate', recipe, pools), []);
   }],
-  ['抽卡台左右布局：设置 sticky + 结果优先 + 概念可折叠', () => {
+  ['抽卡台布局：设置 sticky + 结果优先 + 探索并入过滤面板', () => {
     const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
     for (const needle of ['class="draw-shell"', 'class="draw-side"',
-      'class="draw-main"', 'id="explorePanel"', 'state.conceptsExpanded',
-      "addEventListener('toggle'", 'missingFilterSlots(', '${conceptPanel()}',
-      'min(96vw, 1680px)']) {
+      'class="draw-main"', 'function filterPaneHtml(', 'data-act="filter-mode"',
+      'missingFilterSlots(', 'min(96vw, 1680px)']) {
       assert.ok(app.includes(needle) || css.includes(needle),
         `左右布局缺少接线：${needle}`);
     }
     assert.match(css, /\.draw-side\s*\{[^}]*position:\s*sticky/);
     assert.match(css, /\.draw-shell\s*\{[^}]*336px/);
-    assert.doesNotMatch(app, /conceptPanel\(\)}<div class="grid-2"/,
-      '概念面板不能再全宽压在抽卡设置上方');
+    // 三种过滤入口必须在左栏设置面板内，不能再挂到右栏结果之后
+    const side = (app.match(/<aside class="draw-side">[\s\S]*?<\/aside>/) || [''])[0];
+    const main = (app.match(/<section class="draw-main">[\s\S]*?<\/section>/) || [''])[0];
+    assert.ok(side.includes('filterPaneHtml(mode)'), '过滤面板必须在设置栏内');
+    assert.ok(!main.includes('conceptPanel'), '概念探索不能再挂在结果区末尾');
+    assert.doesNotMatch(app, /conceptPanel\(\)/, '旧的全宽概念面板应已移除');
   }],
   ['结果卡内联状态：图长在卡片上，提交生图不再跳任务队列', () => {
     const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
@@ -390,6 +394,28 @@ const cases = [
       '完成事件应直接用 image_ids 上图');
     assert.match(css, /\.card-state\s*\{/, '缺少状态区样式');
     assert.match(css, /\.shot-img\s*\{/, '缺少卡片内缩略图样式');
+  }],
+  ['缺槽位可就地固定进配方：不用跳配方编辑器再手动选一遍池', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    assert.match(app, /function missingSlots\(\)/, '缺少缺槽位判断');
+    assert.match(app, /async function addFilterToRecipe\(\)/, '缺少一键加槽位');
+    assert.match(app, /data-act="fix-recipe"/, '提示旁缺少按钮');
+    assert.match(app, /api\.put\('\/api\/recipes\/' \+ rid/, '应直接改配方');
+    assert.match(app, /def\.slots\.push\(\{ pool: m\.pool, count: 1, weight: 1, filter: m\.tag \}\)/,
+      '槽位要带上 tag 过滤，否则加进去也抽不到指定条目');
+    assert.match(app, /id="filterHintBox"/, '提示区要能随输入更新');
+  }],
+  ['参数预设就地调参：保存即应用，且不漏传 loras', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    assert.match(app, /async function openTuning\(\)/, '缺少调参抽屉');
+    assert.match(app, /function tuningHtml\(\)/, '缺少调参表单');
+    assert.match(app, /async function saveTuning\(\)/, '缺少保存逻辑');
+    assert.match(app, /data-act="tune-open"/, '设置栏缺少调参入口');
+    assert.match(app, /data-act="tune-save"/, '缺少保存按钮');
+    // 后端 upsert 会整体覆盖 loras_json，漏传等于把用户 LoRA 清空
+    assert.match(app, /loras: t\.loras \|\| \[\]/, '漏传 loras');
+    assert.match(app, /state\.form\.gen_profile_id = String\(saved\.id\)/,
+      '保存后应自动应用，否则还要手动重选预设');
   }],
 ];
 
