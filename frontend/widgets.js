@@ -224,29 +224,26 @@ export function normalizeConcepts(raw) {
   return out;
 }
 
-/** 单张概念卡：叠放最多 3 张真实代表图，文字只是辅助说明。 */
+/** 单张概念卡：默认只有文字，图片由 hover / focus 按需拉一张封面浮出。
+ *  点卡片 = 加入过滤；点概念名 = 进详情页看最多 50 张历史图。 */
 export function conceptCardHtml(c, selected = false) {
   const row = normalizeConcepts([c])[0] || { key: '', label: '', kind: '概念', pool: '', filterable: true, image_count: 0, thumbs: [] };
-  const cover = row.thumbs.slice(0, 3);
   const act = row.filterable
     ? `data-act="concept-pick" data-v="${esc(row.key)}" data-pool="${esc(row.pool)}"`
-    : (cover[0] && cover[0].id ? `data-act="img-open" data-id="${esc(cover[0].id)}"` : '');
-  const hint = row.filterable ? '点一下加入过滤' : '点一下看大图';
+    : `data-act="concept-open" data-key="${esc(row.key)}"`;
   const scope = row.filterable ? (row.pool ? `按 ${row.pool} 池` : '全局') : '仅展示';
-  return `<div class="concept-card${selected ? ' picked' : ''}" data-key="${esc(row.key)}">
-    <button type="button" class="concept-hit" ${act} ${act ? '' : 'disabled'}
-      title="${esc(row.label)} · ${esc(row.kind)} · ${row.image_count} 张真实出图 · ${hint}">
-      <span class="concept-imgs count-${cover.length}">
-        ${cover.length
-          ? cover.map((t) => `<img src="${esc(t.url)}" alt="${esc(row.label)} 的样图" loading="lazy">`).join('')
-          : '<span class="concept-nopic">暂无样图</span>'}
-      </span>
+  return `<div class="concept-card${selected ? ' picked' : ''}" data-key="${esc(row.key)}"
+    data-cover-key="${esc(row.key)}" tabindex="0">
+    <button type="button" class="concept-hit" ${act}
+      title="${esc(row.label)} · ${esc(row.kind)} · ${row.image_count} 张真实出图 · 点卡片加入过滤">
+      <span class="concept-fig" aria-hidden="true">${esc(String(row.label || '?').slice(0, 1).toUpperCase())}</span>
       <span class="concept-meta">
-        <span class="concept-name">${esc(cut(row.label, 26))}</span>
         <span class="concept-kind">${esc(row.kind)} · ${esc(scope)}</span>
         <span class="concept-count">${row.image_count} 张出图 / ${row.draw_count} 次抽到</span>
       </span>
     </button>
+    <a class="concept-open" href="#/concept/${encodeURIComponent(row.key)}"
+      title="看这个概念的 ${row.image_count} 张历史出图">${esc(cut(row.label, 26))} →</a>
   </div>`;
 }
 
@@ -268,7 +265,8 @@ export function conceptKindChipsHtml(kinds, selected) {
   return chip('', '全部') + rows.map((k) => chip(k.kind, k.kind, k.count)).join('');
 }
 
-/** 语义检索结果：外部风格锚点 + 我自己出过的图叠在一起，由眼睛做最终判断。 */
+/** 语义检索结果：只留一个外部风格锚点 URL，hover 时才加载那一张图。
+ *  「我的出图」不再叠在卡片上，收进概念详情页。 */
 export function semanticCardsHtml(items) {
   const rows = (Array.isArray(items) ? items : []).filter((x) => x && x.name);
   if (!rows.length) {
@@ -276,55 +274,98 @@ export function semanticCardsHtml(items) {
   }
   return `<div class="concept-wall semantic-wall">${rows.map((x) => {
     const anchor = safeUrl(x.thumb_url);
-    const hist = (x.history && Array.isArray(x.history.thumbs) ? x.history.thumbs : [])
-      .map((t) => safeUrl(t && t.url)).filter(Boolean).slice(0, 2);
-    const imgs = [anchor, ...hist].filter(Boolean).slice(0, 3);
     const reasons = (Array.isArray(x.reason) ? x.reason : [])
       .map((r) => String((r && r.tag) || '')).filter(Boolean).slice(0, 3);
     const badges = [x.core && '核心', x.selected && '精选', x.favorite && '收藏'].filter(Boolean);
     const count = (x.history && x.history.image_count) || 0;
-    return `<div class="concept-card semantic-card">
+    return `<div class="concept-card semantic-card" tabindex="0"
+      data-cover-key="${esc(x.name)}" data-cover-url="${esc(anchor)}"
+      data-cover-count="${Number(count) || 0}">
       <button type="button" class="concept-hit" data-act="semantic-pick" data-v="${esc(x.name)}"
         title="点一下按画师过滤：画师:${esc(x.name)}">
-        <span class="concept-imgs count-${imgs.length}">
-          ${imgs.length
-            ? imgs.map((u, i) => `<img src="${esc(u)}" alt="${esc(x.name)} ${i === 0 ? '风格锚点' : '我的出图'}" loading="lazy">`).join('')
-            : '<span class="concept-nopic">暂无样图</span>'}
-        </span>
+        <span class="concept-fig" aria-hidden="true">${esc(String(x.name || '?').slice(0, 1).toUpperCase())}</span>
         <span class="concept-meta">
-          <span class="concept-name">${esc(cut(x.name, 24))}</span>
           <span class="concept-kind">${esc(badges.join(' · ') || '画师')}</span>
           <span class="concept-count">${esc(reasons.join(' / ') || (count ? `我用它出过 ${count} 张` : '风格参考'))}</span>
         </span>
       </button>
+      <a class="concept-open" href="#/concept/${encodeURIComponent(x.name)}"
+        title="看这个画师的历史出图">${esc(cut(x.name, 24))} →</a>
     </div>`;
   }).join('')}</div>`;
 }
 
-/** 抽卡结果卡：把本次抽到的概念映射成历史真实出图小图，零额外请求。 */
+/** 抽卡结果卡：只给概念 chip，悬浮时按需拉一张代表图，不再一次铺多张 <img>。 */
 export function conceptStripHtml(detail, thumbMap) {
-  const map = thumbMap && typeof thumbMap === 'object' ? thumbMap : {};
   const rows = Array.isArray(detail) ? detail : [];
   const out = [];
   const seen = new Set();
   for (const s of rows) {
-    if (!s || typeof s !== 'object') continue;
+    if (!s || typeof s !== 'object' || s.empty || s.skipped) continue;
     const tags = Array.isArray(s.tags) ? s.tags
       : (typeof s.tags === 'string' ? [s.tags] : []);
-    for (const t of tags) {
-      for (const part of String(t).split(/[,，]/)) {
+    const cand = [...tags];
+    if (s.label) cand.push(s.label);
+    for (const raw of cand) {
+      for (const part of String(raw).split(/[,，]/)) {
         const k = String(part).replace(/\\/g, '').trim().toLowerCase();
-        const url = map[k];
-        if (url && k.length >= 3 && !seen.has(k)) {
-          seen.add(k); out.push({ key: k, url: safeUrl(url) });
-        }
-        if (out.length >= 6) break;
+        if (k.length >= 3 && !seen.has(k)) { seen.add(k); out.push(k); }
+        if (out.length >= 8) break;
       }
-      if (out.length >= 6) break;
+      if (out.length >= 8) break;
     }
-    if (out.length >= 6) break;
+    if (out.length >= 8) break;
   }
   if (!out.length) return '';
-  return `<div class="concept-strip">${out.map((x) =>
-    `<img src="${esc(x.url)}" alt="${esc(x.key)} 的真实出图" title="${esc(x.key)}" loading="lazy">`).join('')}</div>`;
+  return `<div class="concept-strip">${out.map((k) =>
+    `<span class="strip-chip" data-cover-key="${esc(k)}" tabindex="0"
+      title="悬浮看一张代表图 · 点进概念页看全部">${esc(cut(k, 24))}</span>`).join('')}</div>`;
+}
+
+/** hover 浮层：整个页面任何时刻只浮出一张代表图。 */
+export function coverPopoverHtml(cover) {
+  const c = cover && typeof cover === 'object' ? cover : {};
+  const img = c.image && typeof c.image === 'object' ? c.image : null;
+  const url = safeUrl(img && img.url);
+  const inner = url
+    ? `<img src="${esc(url)}" alt="${esc(c.key || '概念')} 的代表图">`
+    : '<span class="concept-nopic">还没有出过图</span>';
+  const meta = c.found
+    ? `${Number(c.image_count || 0)} 张出图 · 点概念名看全部`
+    : '数据库里还没有这个概念';
+  return `<span class="cover-pop">${inner}<span class="cover-pop-meta">${esc(meta)}</span></span>`;
+}
+
+/** 概念详情页：首屏最多 50 张历史出图，可评分 / 收藏 / 加载更多。 */
+export function conceptDetailHtml(d) {
+  const page = d && typeof d === 'object' ? d : {};
+  const items = Array.isArray(page.items) ? page.items : [];
+  const key = String(page.key || '');
+  const total = Number(page.total || 0);
+  const tiles = items.map((x) => {
+    const url = safeUrl(x && x.url);
+    const id = Number(x && x.id) || 0;
+    const rating = Number(x && x.rating) || 0;
+    const fav = !!(x && x.favorite);
+    return `<div class="concept-tile">
+      <button type="button" class="tile-img" data-act="img-open" data-id="${id}" title="点开原图">
+        ${url ? `<img src="${esc(url)}" alt="${esc(key)} 的历史出图" loading="lazy">`
+              : '<span class="concept-nopic">无缩略图</span>'}
+      </button>
+      <div class="tile-bar">
+        <button type="button" class="chip small${rating ? ' on' : ''}"
+          data-act="img-rate" data-id="${id}" data-v="${rating ? 0 : 5}">${rating ? '★ ' + rating : '☆ 评分'}</button>
+        <button type="button" class="chip small${fav ? ' on' : ''}"
+          data-act="img-fav" data-id="${id}" data-v="${fav ? 0 : 1}">${fav ? '♥ 收藏' : '♡ 收藏'}</button>
+      </div>
+    </div>`;
+  }).join('');
+  const more = items.length < total
+    ? `<button type="button" class="btn small" data-act="concept-more">再加载最多 50 张</button>` : '';
+  return `<div class="panel concept-detail">
+    <div class="panel-head"><h2>${esc(page.label || key)}</h2>
+      <span class="sub">${esc(page.kind || '概念')}${page.pool ? ' · ' + esc(page.pool) : ''} · 共 ${total} 张历史出图 · 首屏上限 50 张</span></div>
+    <div class="row"><button type="button" class="btn small" data-act="concept-back">← 返回抽卡台</button>${more}</div>
+    <div class="concept-grid">${tiles || '<div class="hint">这个概念还没有出过图</div>'}</div>
+  </div>`;
 }

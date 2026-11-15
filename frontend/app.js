@@ -6,6 +6,7 @@ import {
   poolOptionsHtml, tagOptionsHtml, normalizeLoras, loraOptionsHtml, loraRowsHtml,
   normalizeSlots, slotRowsHtml, slotPoolOptionsHtml,
   conceptCardsHtml, conceptKindChipsHtml, semanticCardsHtml, conceptStripHtml,
+  coverPopoverHtml, conceptDetailHtml,
 } from './widgets.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -28,6 +29,9 @@ const state = {
   concepts: { items: [], kinds: [], kind: '', q: '', image_count: 0, loaded: false },
   semantics: { ready: null, reason: '', items: [], q: '', mode: '' },
   conceptThumbMap: {},
+  // 封面按需加载：按概念 key 缓存，新图产出后整体失效
+  covers: { cache: {}, pending: {} },
+  conceptPage: { key: '', label: '', kind: '', pool: '', items: [], total: 0, offset: 0 },
 };
 
 let toastTimer = null;
@@ -175,7 +179,7 @@ function conceptPanel() {
     `<button type="button" class="chip hot" data-act="feel-chip" data-v="${esc(f)}">${esc(f)}</button>`).join('');
   return `<div class="panel concept-panel">
     <div class="panel-head"><h2>看图选概念</h2>
-      <span class="sub">抽象概念用真实出图判断 · ${c.image_count} 张历史图 · 点缩略图即加入过滤</span></div>
+      <span class="sub">悬浮看一张代表图 · 点概念名看全部（首屏 50 张）· 点卡片加入过滤 · ${c.image_count} 张历史图</span></div>
     <div class="semantic-bar">
       <input type="text" id="semanticQ" value="${esc(state.semantics.q)}"
         placeholder="想要的感觉：一句话描述画风，本地语义检索（可留空）">
@@ -208,9 +212,10 @@ function syncConceptPanel() {
   if (hint) hint.innerHTML = semanticHintHtml();
 }
 
-/** 概念墙完全由数据库驱动，不依赖语义索引 / 外部项目 / 任何 AI 服务。 */
+/** 概念墙完全由数据库驱动，不依赖语义索引 / 外部项目 / 任何 AI 服务。
+ *  列表只取文字与计数，一张图都不铺；封面在 hover / focus 时按需请求。 */
 async function loadConcepts() {
-  const p = new URLSearchParams({ limit: '60', thumbs: '2' });
+  const p = new URLSearchParams({ limit: '60' });
   if (state.concepts.kind) p.set('kind', state.concepts.kind);
   if (state.concepts.q) p.set('q', state.concepts.q);
   try {
@@ -219,15 +224,75 @@ async function loadConcepts() {
     state.concepts.kinds = d.kinds || [];
     state.concepts.image_count = d.image_count || 0;
     state.concepts.loaded = true;
-    // 结果卡的槽位小图复用同一份映射，不额外发请求
-    const map = {};
-    for (const x of state.concepts.items) {
-      const url = (x.thumbs && x.thumbs[0] && x.thumbs[0].url) || x.thumb_url;
-      if (url) map[String(x.key).toLowerCase()] = url;
-    }
-    state.conceptThumbMap = map;
+    state.conceptThumbMap = {};
     syncConceptPanel();
   } catch (_) { /* 概念墙是增强能力，失败不阻塞抽卡主流程 */ }
+}
+
+// ---------------- 按需悬浮封面：一次只显示一张，按 key 缓存 ----------------
+function hideCover(el) {
+  const pop = el && el.querySelector ? el.querySelector('.cover-pop') : null;
+  if (pop) pop.remove();
+}
+
+function paintCover(el, cover) {
+  // coverActive 由进入时置位、离开时清除；异步请求返回时若已离开就不插入孤儿浮层
+  if (!el || !el.isConnected || el.dataset.coverActive !== '1') return;
+  hideCover(el);
+  el.insertAdjacentHTML('beforeend', coverPopoverHtml(cover));
+}
+
+async function showCover(el) {
+  if (!el || el.querySelector('.cover-pop')) return;
+  const key = String(el.dataset.coverKey || '');
+  if (!key) return;
+  el.dataset.coverActive = '1';
+  // 语义卡的外部风格锚点已随卡片给出，无需再打后端
+  const direct = el.dataset.coverUrl;
+  if (direct) {
+    paintCover(el, {
+      key, found: true, image_count: Number(el.dataset.coverCount || 0),
+      image: { url: direct.startsWith('/api/') ? direct : '' },
+    });
+    return;
+  }
+  const cache = state.covers.cache;
+  if (cache[key]) { paintCover(el, cache[key]); return; }
+  if (state.covers.pending[key]) return;
+  state.covers.pending[key] = true;
+  try {
+    const d = await api.get('/api/concepts/cover?' + new URLSearchParams({ key }));
+    cache[key] = d;
+    paintCover(el, d);
+  } catch (_) {
+    paintCover(el, { key, found: false });
+  } finally {
+    delete state.covers.pending[key];
+  }
+}
+
+function onCoverOver(e) {
+  const el = e.target.closest ? e.target.closest('[data-cover-key]') : null;
+  if (!el || (e.relatedTarget && el.contains(e.relatedTarget))) return;
+  showCover(el);
+}
+
+function onCoverOut(e) {
+  const el = e.target.closest ? e.target.closest('[data-cover-key]') : null;
+  if (!el || (e.relatedTarget && el.contains(e.relatedTarget))) return;
+  delete el.dataset.coverActive;
+  hideCover(el);
+}
+
+// ---------------- 概念详情页：#/concept/<key>，首屏最多 50 张 ----------------
+async function renderConceptPage(key) {
+  const d = await api.get('/api/concepts/images?'
+    + new URLSearchParams({ key, limit: '50', offset: '0' }).toString());
+  state.conceptPage = {
+    key, label: d.label || key, kind: d.kind || '', pool: d.pool || '',
+    items: d.items || [], total: Number(d.total || 0), offset: 0,
+  };
+  view.innerHTML = conceptDetailHtml(state.conceptPage);
 }
 
 async function loadSemantics(q = '') {
@@ -719,6 +784,33 @@ async function onClick(e) {
         syncConceptPanel(); await loadConcepts(); break;
       case 'concept-refresh':
         await loadConcepts(); done('概念墙已刷新'); break;
+      case 'concept-back':
+        location.hash = '#draw'; break;
+      case 'concept-more': {
+        const p = state.conceptPage;
+        const d = await api.get('/api/concepts/images?' + new URLSearchParams({
+          key: p.key, limit: '50', offset: String(p.items.length),
+        }).toString());
+        p.items = p.items.concat(d.items || []);
+        p.total = Number(d.total || p.total);
+        view.innerHTML = conceptDetailHtml(p);
+        break;
+      }
+      case 'img-rate':
+      case 'img-fav': {
+        const body = act === 'img-rate' ? { rating: Number(btn.dataset.v) }
+          : { favorite: btn.dataset.v === '1' };
+        await api.patch('/api/images/' + id, body);
+        const item = state.conceptPage.items.find((x) => x.id === id);
+        if (item) {
+          if (act === 'img-rate') item.rating = Number(btn.dataset.v);
+          else item.favorite = btn.dataset.v === '1';
+        }
+        state.covers.cache = {};   // 评分 / 收藏会改变封面，缓存必须失效
+        view.innerHTML = conceptDetailHtml(state.conceptPage);
+        done(act === 'img-rate' ? '评分已保存' : '收藏已更新');
+        break;
+      }
       case 'feel-chip': {
         const el = $('#semanticQ'); if (el) el.value = btn.dataset.v;
         await loadSemantics(btn.dataset.v); break;
@@ -883,7 +975,19 @@ async function onClick(e) {
 }
 
 async function onRoute() {
-  const v = (location.hash.slice(1) || 'draw');
+  const raw = (location.hash.slice(1) || 'draw').replace(/^\//, '');
+  if (raw.startsWith('concept/')) {
+    setNav('draw');
+    try {
+      await renderConceptPage(decodeURIComponent(raw.slice(8)));
+    } catch (err) {
+      fail(err);
+      view.innerHTML = `<div class="panel err-text">概念页加载失败：${esc(friendlyError(err))}
+        <button class="btn small" data-act="concept-back">返回抽卡台</button></div>`;
+    }
+    return;
+  }
+  let v = raw;
   if (!['draw', 'pools', 'recipes', 'jobs', 'gallery', 'settings'].includes(v)) v = 'draw';
   setNav(v);
   try {
@@ -982,7 +1086,10 @@ function startStream() {
     if (j) Object.assign(j, ev);
     else state.jobs.unshift({ id: ev.job_id, draw_id: '-', created_at: '', ...ev });
     if (state.currentView === 'jobs') refreshJobsBody();
-    if (ev.status === 'succeeded' && state.currentView === 'gallery') renderGallery().catch(fail);
+    if (ev.status === 'succeeded') {
+      state.covers.cache = {};   // 新图可能成为某个概念的新封面
+      if (state.currentView === 'gallery') renderGallery().catch(fail);
+    }
   }, (ok) => {
     const el = $('#streamState');
     if (el) el.textContent = ok ? 'SSE 实时连接' : 'SSE 断开，重连中…';
@@ -993,6 +1100,10 @@ async function boot() {
   view.addEventListener('click', onClick);
   view.addEventListener('change', onChange);
   view.addEventListener('input', onInput);
+  view.addEventListener('mouseover', onCoverOver);
+  view.addEventListener('mouseout', onCoverOut);
+  view.addEventListener('focusin', onCoverOver);
+  view.addEventListener('focusout', onCoverOut);
   document.querySelectorAll('#nav button').forEach((b) =>
     b.addEventListener('click', () => { location.hash = '#' + b.dataset.view; }));
   window.addEventListener('hashchange', onRoute);
