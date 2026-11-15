@@ -1,18 +1,19 @@
 // 抽卡工作台前端：原生 ES Modules，零框架、零构建。
 import { api, jobStream, friendlyError } from './api.js';
+import { esc, cut, slotChips } from './detail.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
-  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const cut = (s, n = 120) => (s.length > n ? s.slice(0, n) + '…' : s);
 const num = (v, d) => (v === '' || v === undefined || v === null ? d : Number(v));
+const LAST_SESSION_KEY = 'gacha_last_session';
 
 const state = {
   recipes: [], profiles: [], pools: [], batches: [], jobs: [], images: [],
   config: {}, comfy: {}, models: {}, session: null, draws: [],
   currentView: 'draw', editingRecipe: null, openPool: null,
   gallery: { favorite: '', origin: '', min_rating: 0 },
+  // 抽卡台表单值集中保存：重绘 / 切视图 / 刷新都不再丢失用户的选择
+  form: { recipe_id: '', pulls: 3, count: 1, seed: '', filter: '', gen_profile_id: '' },
 };
 
 let toastTimer = null;
@@ -64,26 +65,29 @@ async function refreshStatusOnly() {
 
 // ---------------- 抽卡台 ----------------
 function drawForm() {
+  const f = state.form;
+  const sel = (a, b) => String(a ?? '') === String(b ?? '') ? 'selected' : '';
   const recipeOpts = state.recipes.map((r) =>
-    `<option value="${r.id}">${esc(r.name)}</option>`).join('');
+    `<option value="${r.id}" ${sel(r.id, f.recipe_id)}>${esc(r.name)}</option>`).join('');
   const profileOpts = state.profiles.map((p) =>
-    `<option value="${p.id}">${esc(p.name)} · ${esc(p.checkpoint || '未设模型')}</option>`).join('');
+    `<option value="${p.id}" ${sel(p.id, f.gen_profile_id)}>${esc(p.name)} · ${esc(p.checkpoint || '未设模型')}</option>`).join('');
   return `<div class="grid-2">
     <div class="panel">
       <div class="panel-head"><h2>抽卡设置</h2><span class="sub">${state.pools.length} 个卡池</span></div>
-      <div class="field"><span>配方</span><select id="dRecipe"><option value="">（不用配方 · 全池随机）</option>${recipeOpts}</select></div>
+      <div class="field"><span>配方</span><select id="dRecipe"><option value="" ${sel('', f.recipe_id)}>（不用配方 · 全池随机）</option>${recipeOpts}</select></div>
       <div class="row" style="margin-top:10px">
-        <div class="field"><span>连抽数</span><input type="number" id="dPulls" value="3" min="1" max="50"></div>
-        <div class="field"><span>每池条数</span><input type="number" id="dCount" value="1" min="1" max="20"></div>
-        <div class="field"><span>种子</span><input type="number" id="dSeed" placeholder="留空随机"></div>
+        <div class="field"><span>连抽数</span><input type="number" id="dPulls" value="${esc(f.pulls)}" min="1" max="50"></div>
+        <div class="field"><span>每池条数</span><input type="number" id="dCount" value="${esc(f.count)}" min="1" max="20"></div>
+        <div class="field"><span>种子</span><input type="number" id="dSeed" value="${esc(f.seed)}" placeholder="留空随机"></div>
       </div>
       <div class="field" style="margin-top:10px"><span>按池过滤（可选，如 角色:Fate）</span>
-        <input type="text" id="dFilter" placeholder="留空 = 全部"></div>
+        <input type="text" id="dFilter" value="${esc(f.filter)}" placeholder="留空 = 全部"></div>
       <div class="field" style="margin-top:10px"><span>生成参数预设</span>
-        <select id="dProfile"><option value="">（跟随配方 / 默认）</option>${profileOpts}</select></div>
+        <select id="dProfile"><option value="" ${sel('', f.gen_profile_id)}>（跟随配方 / 默认）</option>${profileOpts}</select></div>
       <div class="row" style="margin-top:14px">
         <button class="btn primary" data-act="draw">抽 卡</button>
         <button class="btn" data-act="gen-all" ${state.draws.length ? '' : 'disabled'}>本批全部生图</button>
+        ${state.draws.length ? '<button class="btn" data-act="draw-clear">清空结果</button>' : ''}
       </div>
       <p class="hint" style="margin-bottom:0">同种子可复现；生图是后台任务，提交后可去「任务队列」看进度。</p>
     </div>
@@ -96,13 +100,24 @@ function drawForm() {
   </div>`;
 }
 
+/** 把抽卡台表单当前值同步进 state，任何重绘都不再丢失选择。 */
+function readDrawForm() {
+  const get = (id) => $(id)?.value;
+  if (get('#dRecipe') === undefined) return;
+  state.form = {
+    recipe_id: get('#dRecipe'), pulls: num(get('#dPulls'), 3),
+    count: num(get('#dCount'), 1), seed: get('#dSeed'),
+    filter: get('#dFilter'), gen_profile_id: get('#dProfile'),
+  };
+}
+
 function drawCard(d) {
-  const chips = (d.detail || []).filter((x) => x.tags?.length).map((x) =>
-    `<span class="chip">${esc(x.slot)}: ${esc(cut(x.tags.join(' / '), 48))}</span>`).join('');
+  const chips = slotChips(d.detail);
   return `<div class="card">
     <div class="card-head"><b>第 ${d.idx} 抽</b><span>seed ${esc(d.seed ?? '随机')} · #${d.id}</span></div>
     <textarea data-prompt="${d.id}" id="prompt_${d.id}">${esc(d.prompt)}</textarea>
     <div class="tags">${chips || '<span class="hint">无槽位明细</span>'}</div>
+    <div class="hint">此处编辑用于复制调整；生图使用抽卡时保存的快照，保证同 seed 可复现。</div>
     <div class="row" style="margin-top:10px">
       <button class="btn small" data-act="copy" data-id="${d.id}">复制</button>
       <button class="btn small primary" data-act="gen-one" data-id="${d.id}">生成此图</button>
@@ -112,23 +127,54 @@ function drawCard(d) {
 
 async function renderDraw() { view.innerHTML = drawForm(); }
 
+/** 刷新页面后恢复上一批抽卡结果（只读回显，不产生新数据）。
+ *  优先用上次记录的会话；旧版前端没记录过，就回退到库里最近一批。
+ *  「清空结果」写入 '0' 作为持久屏蔽标记。 */
+async function restoreLastDraw() {
+  const raw = sessionStorage.getItem(LAST_SESSION_KEY);
+  if (raw === '0') return;
+  try {
+    let sid = Number(raw || 0);
+    if (!sid) {
+      const recent = await api.get('/api/draws?limit=1');
+      sid = Array.isArray(recent) && recent.length ? Number(recent[0].session_id) : 0;
+    }
+    if (!sid) return;
+    const [s, rows] = await Promise.all([
+      api.get(`/api/draw-sessions/${sid}`),
+      api.get(`/api/draws?session_id=${sid}`),
+    ]);
+    if (Array.isArray(rows) && rows.length) {
+      state.session = { session_id: sid, seed: s?.seed };
+      state.draws = rows;
+    } else {
+      sessionStorage.setItem(LAST_SESSION_KEY, '0');
+    }
+  } catch (_) {
+    sessionStorage.setItem(LAST_SESSION_KEY, '0');
+  }
+}
+
 async function doDraw() {
+  readDrawForm();
+  const f = state.form;
   const body = {
-    recipe_id: num($('#dRecipe').value, null),
-    pulls: num($('#dPulls').value, 3),
-    count: num($('#dCount').value, 1),
-    seed: num($('#dSeed').value, null),
-    filter: $('#dFilter').value.trim(),
-    gen_profile_id: num($('#dProfile').value, null),
+    recipe_id: num(f.recipe_id, null),
+    pulls: num(f.pulls, 3),
+    count: num(f.count, 1),
+    seed: num(f.seed, null),
+    filter: String(f.filter || '').trim(),
+    gen_profile_id: num(f.gen_profile_id, null),
   };
   const data = await api.post('/api/draw-sessions', body);
   state.session = data; state.draws = data.draws;
+  sessionStorage.setItem(LAST_SESSION_KEY, String(data.session_id));
   done(`抽卡完成：${data.draws.length} 抽 / ${data.pool_count} 个池`);
-  renderDraw();
+  await renderDraw();
 }
 
 async function submitJobs(ids) {
-  const profileId = num($('#dProfile')?.value, null);
+  const profileId = num(state.form.gen_profile_id, null);
   const data = await api.post('/api/jobs', { draw_ids: ids, gen_profile_id: profileId });
   done(`已提交 ${data.created.length} 个任务${data.reused.length ? `，复用 ${data.reused.length} 个` : ''}`);
   location.hash = '#jobs';
@@ -362,6 +408,10 @@ async function onClick(e) {
   try {
     switch (act) {
       case 'draw': await doDraw(); break;
+      case 'draw-clear':
+        state.draws = []; state.session = null;
+        sessionStorage.setItem(LAST_SESSION_KEY, '0');
+        await renderDraw(); break;
       case 'gen-all': await submitJobs(state.draws.map((d) => d.id)); break;
       case 'gen-one': await submitJobs([id]); break;
       case 'copy': {
@@ -410,6 +460,7 @@ async function onClick(e) {
           `<div class="chip" style="display:block;margin-bottom:6px">[${i + 1}] ${esc(cut(r.prompt, 220))}</div>`).join('');
         break;
       }
+      case 'view-retry': await onRoute(); break;
       case 'job-refresh': await renderJobs(); break;
       case 'job-cancel': await api.post(`/api/jobs/${id}/cancel`, {}); await renderJobs(); break;
       case 'job-retry': await api.post(`/api/jobs/${id}/retry`, {}); await renderJobs(); break;
@@ -480,7 +531,24 @@ async function onRoute() {
     else if (v === 'jobs') await renderJobs();
     else if (v === 'gallery') await renderGallery();
     else await renderSettings();
-  } catch (err) { view.innerHTML = `<div class="panel err-text">页面加载失败：${esc(friendlyError(err))}</div>`; }
+  } catch (err) {
+    // 不整页替换：保留已有内容，只在顶部插入错误条，避免一条脏数据把界面清空
+    fail(err);
+    const bar = `<div class="panel err-text">页面加载失败：${esc(friendlyError(err))}
+      <button class="btn small" data-act="view-retry">重试</button></div>`;
+    view.innerHTML = view.innerHTML.trim() ? bar + view.innerHTML : bar;
+  }
+}
+
+function onInput(e) {
+  const t = e.target;
+  if (['dRecipe', 'dPulls', 'dCount', 'dSeed', 'dFilter', 'dProfile'].includes(t.id)) {
+    readDrawForm();
+  }
+  if (t.id?.startsWith('prompt_')) {
+    const d = state.draws.find((x) => x.id === Number(t.id.slice(7)));
+    if (d) d.prompt = t.value;   // 切视图重绘时不丢编辑内容
+  }
 }
 
 function onChange(e) {
@@ -512,6 +580,7 @@ function startStream() {
 async function boot() {
   view.addEventListener('click', onClick);
   view.addEventListener('change', onChange);
+  view.addEventListener('input', onInput);
   document.querySelectorAll('#nav button').forEach((b) =>
     b.addEventListener('click', () => { location.hash = '#' + b.dataset.view; }));
   window.addEventListener('hashchange', onRoute);
@@ -521,6 +590,7 @@ async function boot() {
   });
   try {
     await refreshBase();
+    await restoreLastDraw();
     startStream();
     await onRoute();
   } catch (err) {
