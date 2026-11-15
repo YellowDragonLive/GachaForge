@@ -18,6 +18,10 @@ export function slotChips(detail, limit = 20) {
   const chips = detail.map((x) => {
     if (!x || typeof x !== 'object' || x.skipped) return '';
     const name = x.slot || x.friendly || x.pool || '条目';
+    if (x.empty) {
+      return `<span class="chip warn" title="${esc(x.reason || '无匹配条目')}">` +
+        `${esc(name)}: ⚠ 无匹配条目</span>`;
+    }
     const raw = x.tags;
     const text = Array.isArray(raw)
       ? raw.map((v) => String(v ?? '')).filter(Boolean).join(' / ')

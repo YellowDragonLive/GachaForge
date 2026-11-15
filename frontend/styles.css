@@ -60,6 +60,9 @@ textarea { resize: vertical; min-height: 76px; font-family: ui-monospace, Consol
 .chip { display: inline-block; padding: 2px 8px; border-radius: 999px;
   background: var(--surface-2); color: var(--muted); font-size: 11px; margin: 2px 3px 2px 0; }
 .chip.hl { background: var(--primary-soft); color: var(--primary); }
+.chip.warn { background: #fdf1dc; color: var(--warn); }
+.warn-panel { border-left: 3px solid var(--warn); }
+.warn-text { color: var(--warn); }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
 .card { background: var(--surface); border: 1px solid var(--line);

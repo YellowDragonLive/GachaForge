@@ -6,10 +6,11 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
 const num = (v, d) => (v === '' || v === undefined || v === null ? d : Number(v));
 const LAST_SESSION_KEY = 'gacha_last_session';
+const FORM_KEY = 'gacha_draw_form';
 
 const state = {
   recipes: [], profiles: [], pools: [], batches: [], jobs: [], images: [],
-  config: {}, comfy: {}, models: {}, session: null, draws: [],
+  config: {}, comfy: {}, models: {}, session: null, draws: [], warnings: [],
   currentView: 'draw', editingRecipe: null, openPool: null,
   gallery: { favorite: '', origin: '', min_rating: 0 },
   // 抽卡台表单值集中保存：重绘 / 切视图 / 刷新都不再丢失用户的选择
@@ -80,8 +81,10 @@ function drawForm() {
         <div class="field"><span>每池条数</span><input type="number" id="dCount" value="${esc(f.count)}" min="1" max="20"></div>
         <div class="field"><span>种子</span><input type="number" id="dSeed" value="${esc(f.seed)}" placeholder="留空随机"></div>
       </div>
-      <div class="field" style="margin-top:10px"><span>按池过滤（可选，如 角色:Fate）</span>
-        <input type="text" id="dFilter" value="${esc(f.filter)}" placeholder="留空 = 全部"></div>
+      <div class="field" style="margin-top:10px"><span>按池过滤（可选，推荐写 角色:fate）</span>
+        <input type="text" id="dFilter" value="${esc(f.filter)}" placeholder="留空 = 全部；裸关键字会作用于所有卡池">
+        <div class="hint warn-text" id="filterHint" ${filterHintText() ? '' : 'hidden'}>${esc(filterHintText())}</div>
+        <div class="hint">写法：<code>角色:fate</code> 只筛角色池；<code>fate</code> 会筛掉所有不含 fate 的池（画师/动作槽位可能变空）。大小写不敏感。填了这里会<b>临时覆盖</b>配方槽位里的 filter；留空才按槽位 filter 抽。</div></div>
       <div class="field" style="margin-top:10px"><span>生成参数预设</span>
         <select id="dProfile"><option value="" ${sel('', f.gen_profile_id)}>（跟随配方 / 默认）</option>${profileOpts}</select></div>
       <div class="row" style="margin-top:14px">
@@ -92,12 +95,33 @@ function drawForm() {
       <p class="hint" style="margin-bottom:0">同种子可复现；生图是后台任务，提交后可去「任务队列」看进度。</p>
     </div>
     <div>
+      ${state.warnings.length ? `<div class="panel warn-panel"><b>本次抽卡提示</b>
+        ${state.warnings.map((w) => `<div class="hint warn-text" style="margin-top:6px">${esc(w)}</div>`).join('')}</div>` : ''}
       ${state.draws.length ? `<div class="panel-head"><h2>本批结果 · ${state.draws.length} 抽</h2>
         <span class="sub">会话 #${state.session?.session_id ?? '-'} · seed ${esc(state.session?.seed ?? '随机')}</span></div>
         <div class="cards">${state.draws.map(drawCard).join('')}</div>` :
         `<div class="panel"><div class="loading">选好配方后点「抽 卡」，结果会显示在这里。</div></div>`}
     </div>
   </div>`;
+}
+
+/** 裸关键字是全局过滤，配方槽位会因此静默变空：输入时就地提示，不必等抽完。 */
+function filterHintText() {
+  const f = state.form;
+  const bare = String(f.filter || '').split(',').map((s) => s.trim())
+    .filter((s) => s && !s.includes(':') && !s.includes('：'));
+  if (!bare.length) return '';
+  const withRecipe = String(f.recipe_id || '') !== '';
+  return `⚠ 裸关键字 ${bare.join('、')} 会筛掉所有不含它的卡池` +
+    `${withRecipe ? '（配方槽位可能变空）' : ''}；只筛某个池请写「角色:fate」。`;
+}
+
+function updateFilterHint() {
+  const el = $('#filterHint');
+  if (!el) return;
+  const text = filterHintText();
+  el.textContent = text;
+  el.hidden = !text;
 }
 
 /** 把抽卡台表单当前值同步进 state，任何重绘都不再丢失选择。 */
@@ -109,6 +133,16 @@ function readDrawForm() {
     count: num(get('#dCount'), 1), seed: get('#dSeed'),
     filter: get('#dFilter'), gen_profile_id: get('#dProfile'),
   };
+  sessionStorage.setItem(FORM_KEY, JSON.stringify(state.form));
+  updateFilterHint();
+}
+
+/** 刷新页面后连表单选择一起恢复，避免「刚填的过滤条件又没了」。 */
+function restoreForm() {
+  try {
+    const raw = sessionStorage.getItem(FORM_KEY);
+    if (raw) state.form = { ...state.form, ...JSON.parse(raw) };
+  } catch (_) { /* 坏数据忽略，用默认表单 */ }
 }
 
 function drawCard(d) {
@@ -168,6 +202,7 @@ async function doDraw() {
   };
   const data = await api.post('/api/draw-sessions', body);
   state.session = data; state.draws = data.draws;
+  state.warnings = data.warnings || [];
   sessionStorage.setItem(LAST_SESSION_KEY, String(data.session_id));
   done(`抽卡完成：${data.draws.length} 抽 / ${data.pool_count} 个池`);
   await renderDraw();
@@ -228,7 +263,8 @@ function recipeForm() {
     <div class="field" style="margin-top:8px"><span>固定头部（质量词 / 主体）</span>
       <textarea id="rHead" style="min-height:56px">${esc(def.fixed_head || '')}</textarea></div>
     <div class="field" style="margin-top:8px"><span>槽位 JSON（pool / count / weight / filter）</span>
-      <textarea id="rSlots" style="min-height:130px">${esc(JSON.stringify(def.slots || [], null, 2))}</textarea></div>
+      <textarea id="rSlots" style="min-height:130px">${esc(JSON.stringify(def.slots || [], null, 2))}</textarea>
+      <div class="hint">槽位里的 <code>filter</code> 只在抽卡台「按池过滤」<b>留空</b>时生效；表单填了过滤会以表单为准。</div></div>
     <div class="field" style="margin-top:8px"><span>模板（__池名__ / __池名#3__ / __池名~__）</span>
       <textarea id="rTpl" style="min-height:56px">${esc(def.template || '')}</textarea></div>
     <div class="field" style="margin-top:8px"><span>固定尾部</span>
@@ -409,7 +445,7 @@ async function onClick(e) {
     switch (act) {
       case 'draw': await doDraw(); break;
       case 'draw-clear':
-        state.draws = []; state.session = null;
+        state.draws = []; state.session = null; state.warnings = [];
         sessionStorage.setItem(LAST_SESSION_KEY, '0');
         await renderDraw(); break;
       case 'gen-all': await submitJobs(state.draws.map((d) => d.id)); break;
@@ -589,6 +625,7 @@ async function boot() {
     if (e.target.id === 'lightbox') $('#lightbox').hidden = true;
   });
   try {
+    restoreForm();
     await refreshBase();
     await restoreLastDraw();
     startStream();
