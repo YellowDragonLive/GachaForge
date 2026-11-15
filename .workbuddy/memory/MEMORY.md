@@ -16,3 +16,4 @@
 - 代码改动落盘即 `git commit`，中文提交信息（改了什么 / 为什么改 / 怎么验证）；多个独立改动拆多个 commit。
 - 高频操作先写 `scripts/` 脚本 + `docs/运维_*.md` 手册，手册是唯一口径，流程变了改手册和脚本。
 - 冒烟测试必须用 `%TEMP%` 临时库副本隔离，绝不污染正式库；验证数据按 id 精确清理。
+- **同一台机器有多个 Python，启动脚本不能假设 PATH 里那个装了依赖**（2026-11-15 双击实测踩坑）：双击 bat 走系统 PATH 的 `X:\ProgramData\miniconda3\python.exe` 3.13.13（只有 httpx），终端走 WorkBuddy 自带 `C:\Users\13410\.workbuddy\binaries\python\versions\3.13.12\python.exe` 3.13.14（核心依赖都在这）。`start.bat` 按 `GACHA_PYTHON` → 项目 `.venv` → PATH `python` → WorkBuddy 版本目录的顺序探测「能 import 七个核心模块」的解释器，存 `%PY%` 全程复用并打印。不要给 miniconda 装依赖、不要自动 pip。验证双击场景要用「PATH 只含 miniconda」的临时 bat 干跑，别靠终端环境想当然。

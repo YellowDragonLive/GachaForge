@@ -355,8 +355,13 @@ def main() -> int:
         check("requirements 不会触发 ONNX 下载",
               "onnxruntime==" not in req and "tokenizers==" not in req)
         check("start.bat 不自动 pip 安装",
-              "pip install -r requirements.txt" not in bat.replace(
-                  "Install manually once - python -m pip install -r requirements.txt", ""))
+              "python -m pip install -r requirements.txt ||" not in bat
+              and "Installing dependencies" not in bat)
+        check("start.bat 自动挑选已装依赖的解释器",
+              'set "PY="' in bat
+              and "GACHA_PYTHON" in bat
+              and '"%PY%" scripts\\run_server.py' in bat
+              and "WorkBuddy bundled Python" in bat)
         vd = ROOT / "vendor" / "pydeps"
         check("本机依赖已搬入 vendor/pydeps",
               (vd / "onnxruntime" / "__init__.py").is_file()
