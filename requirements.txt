@@ -1,0 +1,11 @@
+# 抽卡工作台后端依赖（Python 3.13.14 实测通过，精确锁定便于复现）
+# 固定入口：python -m pip install -r requirements.txt
+fastapi==0.163.0
+starlette==1.10.0
+uvicorn==0.54.0
+pydantic==2.14.3
+SQLAlchemy==2.1.8
+alembic==1.20.1
+httpx==0.28.1
+websockets==17.4
+Pillow==13.0.0
