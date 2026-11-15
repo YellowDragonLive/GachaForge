@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>抽卡工作台 · ComfyUI</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="mark"></span><h1>抽卡工作台</h1></div>
+  <nav id="nav">
+    <button data-view="draw" class="active">抽卡台</button>
+    <button data-view="pools">卡池管理</button>
+    <button data-view="recipes">配方编辑器</button>
+    <button data-view="jobs">任务队列</button>
+    <button data-view="gallery">画廊</button>
+    <button data-view="settings">设置</button>
+  </nav>
+  <div class="status" title="ComfyUI 连接状态">
+    <span id="comfyDot" class="dot"></span><span id="comfyText">检测中…</span>
+  </div>
+</header>
+<main id="view" class="view"><div class="loading">正在载入…</div></main>
+<div id="toast" class="toast" hidden></div>
+<div id="lightbox" class="lightbox" hidden>
+  <button class="lightbox-close" id="lightboxClose" aria-label="关闭">×</button>
+  <img id="lightboxImg" alt="原图预览">
+  <div id="lightboxInfo" class="lightbox-info"></div>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
