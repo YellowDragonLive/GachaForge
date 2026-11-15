@@ -29,6 +29,14 @@ def batches(db: Session = Depends(get_db)):
     return ok(svc.list_batches(db))
 
 
+# 注意：必须声明在 /{pool_id} 之前，否则会被当成 pool_id 做 int 校验而返回 422。
+@router.get("/tag-suggest")
+def tag_suggest(q: str = "", pool: str = "", limit: int = Query(30, ge=1, le=100),
+                db: Session = Depends(get_db)):
+    """给前端下拉用的 tag 候选：空 q 返回热门词，q 做子串联想，pool 按类别/池名限定。"""
+    return ok(svc.suggest_tags(db, q=q, pool=pool, limit=limit))
+
+
 @router.delete("/batches/{batch_id}")
 def rollback(batch_id: int, db: Session = Depends(get_db)):
     return ok(svc.rollback_batch(db, batch_id))

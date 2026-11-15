@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,104 @@ def list_items(db: Session, pool_id: int, *, q: str = "",
     return {"total": total, "items": [
         {"id": it.id, "pool_id": it.pool_id, "label": it.label, "tags": it.tags,
          "weight": it.weight, "enabled": it.enabled} for it in rows]}
+
+
+# ---------------- tag 候选：让过滤关键字可以点选，而不是靠用户手打 ----------------
+# 索引按 (行数, max_id) 做签名缓存；导入、增删条目后签名变化会自动重建。
+_TAG_INDEX: dict[str, Any] = {"sig": None, "data": None}
+
+
+def _tag_words(text: str) -> list[str]:
+    """一条 tags 字段 → 可作为过滤关键字的词。
+
+    `asuna (sao), sword art online` → `['asuna', 'sword art online']`：
+    括号后缀去掉只留基础词（过滤是子串包含，`asuna` 能命中全部亚丝娜条目）；
+    下划线保持原样，`blue_archive` 转成空格反而匹配不到。
+    """
+    out: list[str] = []
+    for part in re.split(r"[,，;；|\n]+", text or ""):
+        word = part.strip().strip("()[]{}\"'").strip()
+        if not word or len(word) > 80:
+            continue
+        # 去掉括号后缀与尾部转义反斜杠：'asuna \(sao\)' → 'asuna'
+        base = re.split(r"[（(]", word, 1)[0].strip().rstrip("\\").strip()
+        if 1 < len(base) <= 60:
+            out.append(base.lower())
+    return out
+
+
+def _tag_index(db: Session) -> dict[str, Any]:
+    sig = (int(db.scalar(select(func.count()).select_from(PoolItem)) or 0),
+           int(db.scalar(select(func.max(PoolItem.id))) or 0))
+    if _TAG_INDEX["sig"] == sig and _TAG_INDEX["data"] is not None:
+        return _TAG_INDEX["data"]
+    meta = {p.id: (p.name, p.kind, p.slug) for p in db.scalars(select(Pool)).all()}
+    freq: Counter[str] = Counter()
+    by_pool: dict[int, Counter[str]] = {}
+    labels: dict[int, list[str]] = {}
+    for pool_id, label, tags in db.execute(
+            select(PoolItem.pool_id, PoolItem.label, PoolItem.tags)).all():
+        counter = by_pool.setdefault(pool_id, Counter())
+        for word in _tag_words(tags or ""):
+            freq[word] += 1
+            counter[word] += 1
+        if label and len(label) <= 60:
+            labels.setdefault(pool_id, []).append(label)
+    data = {"freq": freq, "by_pool": by_pool, "meta": meta, "labels": labels}
+    _TAG_INDEX.update(sig=sig, data=data)
+    return data
+
+
+def _label_matches(idx: dict, pool_ids: list[int], qlow: str, limit: int) -> list[tuple]:
+    if limit <= 0:
+        return []
+    seen: set[str] = set()
+    out: list[tuple] = []
+    for pid in pool_ids:
+        for label in idx["labels"].get(pid, []):
+            key = label.lower()
+            # 词卡池的 label 可能是一整行 prompt（含逗号 / 转义符），点选后会被
+            # 过滤表达式的逗号切开而永远匹配不到，不作为候选展示。
+            if any(ch in label for ch in (",", "，", "\\", "\n")) or len(label) > 40:
+                continue
+            if qlow in key and key not in seen:
+                seen.add(key)
+                out.append((label, 1))
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def suggest_tags(db: Session, *, q: str = "", pool: str = "", limit: int = 30) -> dict:
+    """点选用的过滤关键字：空 q 给高频词，非空做子串联想。
+
+    `pool` 与 `core.apply_filter_spec` 同语义：kind 精确命中或 name/slug 子串命中。
+    """
+    idx = _tag_index(db)
+    key = (pool or "").strip().lower()
+    if key:
+        ids = [pid for pid, (name, kind, slug) in idx["meta"].items()
+               if key == kind.lower() or key in name.lower() or key in slug.lower()]
+        merged: Counter[str] = Counter()
+        for pid in ids:
+            merged.update(idx["by_pool"].get(pid, {}))
+    else:
+        ids = list(idx["meta"].keys())
+        merged = idx["freq"]
+
+    qlow = (q or "").strip().lower()
+    if not qlow:
+        items = [{"value": w, "count": int(n), "source": "tag"}
+                 for w, n in merged.most_common(limit)]
+    else:
+        hits = [(w, n) for w, n in merged.items() if qlow in w]
+        hits.sort(key=lambda x: (-x[1], x[0]))
+        items = [{"value": w, "count": int(n), "source": "tag"}
+                 for w, n in hits[:limit]]
+        for label, count in _label_matches(idx, ids, qlow, limit - len(items)):
+            items.append({"value": label, "count": count, "source": "label"})
+    return {"items": items, "total": len(merged), "pool": pool or "全部",
+            "query": q or ""}
 
 
 def add_item(db: Session, pool_id: int, data: dict) -> PoolItem:
