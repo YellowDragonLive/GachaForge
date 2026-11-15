@@ -183,6 +183,65 @@ def main() -> int:
                   "slot" in x and isinstance(x.get("tags"), list) for x in free_detail),
               f"{len(free_detail)} 个槽位")
 
+        # 过滤语义：裸关键字作用于全部卡池，会把配方槽位静默清空；
+        # 按池语法、大小写不敏感、告警与空槽位标记都必须成立。
+        inline = {"fixed_head": "masterpiece, best quality", "template": "",
+                  "fixed_tail": "",
+                  "slots": [{"pool": "画师", "count": 1, "weight": 1, "filter": ""},
+                            {"pool": "action", "count": 1, "weight": 1, "filter": ""},
+                            {"pool": "角色", "count": 1, "weight": 1, "filter": ""}]}
+
+        def draw_with(flt):
+            return c.post("/api/draw-sessions", json={
+                "definition": inline, "pulls": 1, "seed": 99, "filter": flt})
+
+        plain = draw_with("").json()["data"]
+        plain_slots = {x["slot"] for x in plain["draws"][0]["detail"]}
+        per_pool = draw_with("角色:fate").json()["data"]
+        per_slots = {x["slot"] for x in per_pool["draws"][0]["detail"]}
+        check("按池过滤保留全部配方槽位",
+              plain_slots == per_slots and "action" in per_slots,
+              f"{len(per_slots)} 槽位 / {per_pool['pool_count']} 池")
+        bare = draw_with("fate").json()["data"]
+        check("裸关键字告警并标记空槽位",
+              bool(bare["warnings"])
+              and any(x.get("empty") for x in bare["draws"][0]["detail"])
+              and bare["pool_count"] < per_pool["pool_count"],
+              f"{bare['pool_count']} 池 / {len(bare['warnings'])} 条告警")
+        upper = draw_with("角色:FATE")
+        u = upper.json()["data"] if upper.status_code == 200 else {}
+        up_slots = {x["slot"]: x for x in u.get("draws", [{}])[0].get("detail", [])}
+        check("过滤大小写不敏感",
+              upper.status_code == 200 and bool(up_slots.get("角色", {}).get("tags")),
+              f"示例写法 角色:FATE → HTTP {upper.status_code}")
+
+        # 表单过滤是会话级设置，应临时覆盖配方槽位里写死的 filter；
+        # 两层 AND 会让「角色:asuna」被槽位残留的 filter:fate 全部筛掉。
+        with_slot_filter = json.loads(json.dumps(inline))
+        with_slot_filter["slots"][2]["filter"] = "fate"
+
+        def role_slot(data):
+            return next(x for x in data["draws"][0]["detail"] if x["slot"] == "角色")
+
+        r1 = c.post("/api/draw-sessions", json={
+            "definition": with_slot_filter, "filter": "角色:asuna",
+            "pulls": 1, "seed": 7}).json()["data"]
+        role1 = role_slot(r1)
+        check("表单过滤覆盖槽位级 filter",
+              not role1.get("empty")
+              and "asuna" in " ".join(role1["tags"]).lower()
+              and any("覆盖" in w for w in r1["warnings"]),
+              f"角色抽到 {'/'.join(role1['tags'])[:50]} / {len(r1['warnings'])} 条告警")
+        r2 = c.post("/api/draw-sessions", json={
+            "definition": with_slot_filter, "filter": "",
+            "pulls": 1, "seed": 7}).json()["data"]
+        role2 = role_slot(r2)
+        check("表单留空时槽位 filter 仍生效",
+              not role2.get("empty")
+              and "fate" in " ".join(role2["tags"]).lower()
+              and not any("覆盖" in w for w in r2["warnings"]),
+              f"角色抽到 {'/'.join(role2['tags'])[:50]}")
+
         print("-- 任务与幂等 --")
         did = s2["draws"][0]["id"]
         j1 = c.post("/api/jobs", json={"draw_ids": [did]}).json()["data"]

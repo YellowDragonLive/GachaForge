@@ -81,7 +81,19 @@ const cases = [
     assert.match(html, /池0: tag0/);
     assert.doesNotMatch(html, /池100/);
   }],
-  ['抽卡台接线：状态持久化 + 不再直接 join', () => {
+  ['空槽位显式标记（全局过滤把池筛掉时不再静默消失）', () => {
+    const html = slotChips([
+      { slot: 'fixed_head', tags: ['masterpiece'] },
+      { slot: '画师', tags: [], empty: true, reason: '未找到匹配卡池' },
+      { slot: 'action', tags: [], empty: true, reason: '被全局过滤移除' },
+      { slot: '角色', tags: ['astolfo (fate)'] },
+    ]);
+    assert.equal((html.match(/class="chip warn"/g) || []).length, 2);
+    assert.match(html, /画师: ⚠ 无匹配条目/);
+    assert.match(html, /title="未找到匹配卡池"/);
+    assert.match(html, /角色: astolfo/);
+  }],
+  ['抽卡台接线：状态持久化 + 过滤提示 + 不再直接 join', () => {
     const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
     for (const needle of [
       "import { esc, cut, slotChips } from './detail.js'",
@@ -90,6 +102,11 @@ const cases = [
       "view.addEventListener('input', onInput)",
       'sessionStorage.setItem(LAST_SESSION_KEY',
       'await restoreLastDraw()',
+      'state.warnings = data.warnings || []',
+      'sessionStorage.setItem(FORM_KEY',
+      'restoreForm()',
+      'function filterHintText()',
+      'function updateFilterHint()',
     ]) {
       assert.ok(app.includes(needle), `app.js 缺少接线：${needle}`);
     }
