@@ -214,26 +214,27 @@ const cases = [
     assert.equal(rows[1].thumbs.length, 0, '外链图片必须被拒绝');
     assert.equal(rows[1].filterable, false);
   }],
-  ['概念卡片：缩略图是主视觉，点选即带过滤池', () => {
+  ['概念卡片：默认零图片 / hover 按需 / 点名称进详情页', () => {
     const html = W.conceptCardHtml({ key: 'asuna (sao)', label: 'asuna (sao)',
       kind: '角色', pool: '角色', image_count: 5, draw_count: 9,
       thumbs: [{ id: 3, url: '/api/images/3/thumb' },
         { id: 4, url: '/api/images/4/thumb' }] });
-    assert.equal((html.match(/<img /g) || []).length, 2);
+    assert.equal((html.match(/<img /g) || []).length, 0, '卡片列表不许铺任何图片');
+    assert.match(html, /data-cover-key="asuna \(sao\)"/);
     assert.match(html, /data-act="concept-pick"/);
     assert.match(html, /data-pool="角色"/);
     assert.match(html, /data-v="asuna \(sao\)"/);
+    assert.match(html, /href="#\/concept\//, '概念名必须是详情页链接');
     assert.match(html, /5 张出图 \/ 9 次抽到/);
     assert.match(html, /按 角色 池/);
     const injected = W.conceptCardHtml({ key: '<img src=x>', label: '"x"', pool: 'a' });
     assert.match(injected, /&lt;img/);
     assert.doesNotMatch(injected, /<img src=x>/);
-    const info = W.conceptCardHtml({ key: 'wai', label: 'wai', filterable: false,
-      thumbs: [{ id: 7, url: '/api/images/7/thumb' }] });
-    assert.match(info, /data-act="img-open"/);
+    const info = W.conceptCardHtml({ key: 'wai', label: 'wai', filterable: false });
+    assert.match(info, /data-act="concept-open"/);
     assert.doesNotMatch(info, /data-act="concept-pick"/);
   }],
-  ['概念墙：空态提示 / 跨类别 / 选中高亮', () => {
+  ['概念墙：空态提示 / 跨类别 / 选中高亮 / 整墙零图片', () => {
     assert.match(W.conceptCardsHtml([]), /先抽几次卡/);
     const html = W.conceptCardsHtml([
       { key: 'a', label: 'A', kind: '画师', pool: '画师',
@@ -243,6 +244,7 @@ const cases = [
     ], { selectedKeys: ['A'] });
     assert.equal((html.match(/class="concept-card/g) || []).length, 2);
     assert.equal((html.match(/concept-card picked/g) || []).length, 1);
+    assert.equal((html.match(/<img /g) || []).length, 0, '一屏不许铺出上百个 img');
     assert.match(html, /画师/);
     assert.match(html, /服装/);
   }],
@@ -254,46 +256,85 @@ const cases = [
     assert.match(html, /325/);
     assert.equal((html.match(/data-act="concept-kind"/g) || []).length, 3);
   }],
-  ['语义卡片：风格锚点 + 我的出图叠放，命中依据可解释', () => {
+  ['语义卡片：只留一个锚点 URL，图片不预先铺开', () => {
     const html = W.semanticCardsHtml([{ name: 'quasarcake', core: true,
       thumb_url: '/api/semantics/thumb?index=430',
       reason: [{ tag: '厚涂' }, { tag: '柔和光影' }],
       history: { image_count: 2, thumbs: [{ url: '/api/images/9/thumb' }] } }]);
-    assert.equal((html.match(/<img /g) || []).length, 2);
+    assert.equal((html.match(/<img /g) || []).length, 0);
     assert.match(html, /data-act="semantic-pick"/);
     assert.match(html, /data-v="quasarcake"/);
+    assert.match(html, /data-cover-url="\/api\/semantics\/thumb\?index=430"/);
+    assert.match(html, /data-cover-count="2"/);
     assert.match(html, /核心/);
     assert.match(html, /厚涂 \/ 柔和光影/);
-    assert.match(html, /风格锚点/);
+    assert.match(html, /href="#\/concept\//);
     assert.match(W.semanticCardsHtml([]), /输入一句想要的感觉/);
     assert.doesNotMatch(
       W.semanticCardsHtml([{ name: 'x', thumb_url: 'javascript:alert(1)' }]), /javascript:/);
   }],
-  ['结果卡槽位小图：概念反查 / 去转义 / 去重 / 空白输入', () => {
+  ['结果卡槽位：只给概念 chip，悬浮才出图 / 去重 / 空白输入', () => {
     const map = { 'asuna (sao)': '/api/images/9/thumb', outdoors: '/api/images/8/thumb' };
     const html = W.conceptStripHtml([
       { slot: '角色', tags: ['1girl, asuna \\(sao\\), outdoors'] },
       { slot: '角色', tags: ['asuna (sao)'] },
       { slot: '背景', tags: ['javascript:alert(1)'] },
     ], map);
-    assert.equal((html.match(/<img /g) || []).length, 2);
-    assert.match(html, /title="asuna \(sao\)"/);
-    assert.match(html, /\/api\/images\/8\/thumb/);
+    assert.equal((html.match(/<img /g) || []).length, 0);
+    assert.equal((html.match(/data-cover-key=/g) || []).length, 4,
+      '切词去重后应得到 4 个概念 chip');
+    assert.match(html, /data-cover-key="asuna \(sao\)"/);
+    assert.match(html, /data-cover-key="outdoors"/);
     assert.equal(W.conceptStripHtml([], map), '');
     assert.equal(W.conceptStripHtml(null, null), '');
   }],
-  ['app.js 接线：通用概念面板 / 语义面板 / 结果小图', () => {
+  ['hover 浮层：只渲染一张代表图 / 无图降级 / 外链拒绝', () => {
+    const html = W.coverPopoverHtml({ key: 'asuna (sao)', found: true, image_count: 7,
+      image: { url: '/api/images/3/thumb' } });
+    assert.equal((html.match(/<img /g) || []).length, 1, '每个概念只要一张缩略图');
+    assert.match(html, /7 张出图/);
+    assert.match(html, /点概念名看全部/);
+    const empty = W.coverPopoverHtml({ key: 'x', found: false });
+    assert.equal((empty.match(/<img /g) || []).length, 0);
+    assert.match(empty, /还没有这个概念/);
+    assert.doesNotMatch(W.coverPopoverHtml({ key: 'x', found: true,
+      image: { url: 'javascript:alert(1)' } }), /javascript:/);
+  }],
+  ['概念详情页：50 张上限提示 / 网格 / 评分收藏 / 加载更多', () => {
+    const html = W.conceptDetailHtml({ key: 'asuna (sao)', label: 'asuna (sao)',
+      kind: '角色', pool: '角色', total: 73, items: [
+        { id: 1, url: '/api/images/1/thumb', rating: 0, favorite: false },
+        { id: 2, url: '/api/images/2/thumb', rating: 5, favorite: true },
+      ] });
+    assert.equal((html.match(/<img /g) || []).length, 2, '详情页才铺图');
+    assert.match(html, /首屏上限 50 张/);
+    assert.match(html, /共 73 张/);
+    assert.match(html, /data-act="concept-more"/);
+    assert.match(html, /data-act="img-rate"/);
+    assert.match(html, /data-act="img-fav"/);
+    assert.match(html, /data-act="img-open"/);
+    assert.match(html, /data-act="concept-back"/);
+    const xss = W.conceptDetailHtml({ key: '<img src=x>', total: 0, items: [] });
+    assert.doesNotMatch(xss, /<img src=x>/);
+  }],
+  ['app.js 接线：按需悬浮 / 封面缓存 / 概念页路由 / 评分换封面', () => {
     const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
     for (const needle of [
       'conceptCardsHtml(', 'conceptKindChipsHtml(', 'semanticCardsHtml(',
-      'conceptStripHtml(', 'function conceptPanel()', 'function loadConcepts(',
+      'conceptStripHtml(', 'coverPopoverHtml(', 'conceptDetailHtml(',
+      'function conceptPanel()', 'function loadConcepts(',
       'function loadSemantics(', 'function syncConceptPanel()',
+      'function showCover(', 'function hideCover(', 'function onCoverOver(',
+      'function renderConceptPage(', "raw.startsWith('concept/')",
       "case 'concept-pick'", "case 'semantic-pick'", "case 'concept-kind'",
-      '/api/concepts/wall', '/api/semantics/suggest', 'loadSemanticsStatus()',
+      "case 'concept-more'", "case 'img-rate'", "case 'img-fav'",
+      '/api/concepts/wall', '/api/concepts/cover', '/api/concepts/images',
+      'mouseover', 'focusin', 'state.covers.cache = {}',
       'id="conceptWall"', 'id="semanticCards"',
     ]) {
       assert.ok(app.includes(needle), `app.js 缺少接线：${needle}`);
     }
+    assert.doesNotMatch(app, /thumbs: '2'/, '概念墙不再一次拉多张缩略图');
   }],
 ];
 

@@ -49,7 +49,12 @@ if _src.is_file():
     # 否则「有图片记录但文件已被删」会让原图接口检查假失败
     _c = sqlite3.connect(SMOKE_DB)
     try:
-        for _table in ("images", "generation_jobs", "draws", "draw_sessions"):
+        # v2 关系表也要清：正式库可能带着抽卡明细 / 参数快照 / 概念索引，
+        # 只删四张主表会在 sqlite 默认 foreign_keys=OFF 时留下孤儿行。
+        for _table in ("concept_images", "concepts", "image_assets", "images",
+                       "generation_jobs", "draw_slot_tags", "draw_slots",
+                       "session_recipe_slots", "session_recipes", "session_loras",
+                       "draw_profiles", "draws", "draw_sessions", "event_logs"):
             _c.execute(f"DELETE FROM {_table}")
         _c.commit()
     finally:
@@ -299,33 +304,88 @@ def main() -> int:
         check("tag 候选端点已注册",
               "/api/pools/tag-suggest" in spec.get("paths", {}))
 
-        print("-- 通用概念缩略图（数据库驱动） --")
+        print("-- v2 关系模型：单一事实源 --")
+        _c = sqlite3.connect(SMOKE_DB)
+        try:
+            cols = {
+                t: {r[1] for r in _c.execute(f'PRAGMA table_info("{t}")')}
+                for t in ("draws", "draw_sessions", "images", "draw_slots",
+                          "draw_slot_tags", "draw_profiles", "session_loras",
+                          "session_recipes", "session_recipe_slots",
+                          "image_assets", "concepts", "concept_images")
+            }
+            check("重复 JSON 字段已从主表移除",
+                  "detail_json" not in cols["draws"]
+                  and "meta_json" not in cols["images"]
+                  and "profile_snapshot_json" not in cols["draw_sessions"]
+                  and "recipe_snapshot_json" not in cols["draw_sessions"])
+            counts = {t: _c.execute(f'select count(*) from "{t}"').fetchone()[0]
+                      for t in cols}
+            check("抽卡明细写入关系表",
+                  counts["draw_slots"] > 0 and counts["draw_slot_tags"] > 0
+                  and counts["draw_profiles"] > 0 and counts["session_recipes"] > 0,
+                  f"槽位 {counts['draw_slots']} / tag {counts['draw_slot_tags']}")
+            check("图片元数据写入关系表", counts["image_assets"] > 0,
+                  f"{counts['image_assets']} 条")
+            check("概念物化表由写入路径增量维护",
+                  counts["concepts"] > 0 and counts["concept_images"] > 0,
+                  f"{counts['concepts']} 概念 / {counts['concept_images']} 关联")
+        finally:
+            _c.close()
+
+        print("-- 通用概念（列表零图片 / 封面按需 / 详情页 50 张上限） --")
         cst = c.get("/api/concepts/status")
         check("概念索引状态", cst.status_code == 200 and cst.json()["ok"],
               f"{cst.json().get('data', {}).get('concept_count', 0)} 个概念")
-        wj = c.get("/api/concepts/wall", params={"limit": 8, "thumbs": 2}).json()
+        wj = c.get("/api/concepts/wall", params={"limit": 8}).json()
         wd = wj.get("data", {})
-        check("概念墙返回带缩略图的卡片",
-              wj.get("ok") is True and len(wd.get("items", [])) >= 1,
+        items = wd.get("items", [])
+        check("概念墙只返回文字与计数",
+              wj.get("ok") is True and len(items) >= 1
+              and all("thumbs" not in x and "thumb_url" not in x for x in items),
               f"{wd.get('total', 0)} 概念 / {wd.get('image_count', 0)} 图")
         pool_kinds = {p["kind"] for p in c.get("/api/pools").json()["data"]}
         check("概念过滤池都来自数据库类别",
-              all((not x.get("pool")) or x["pool"] in pool_kinds
-                  for x in wd.get("items", [])))
-        if wd.get("items"):
-            first = wd["items"][0]
-            check("概念卡片带真实代表图",
-                  bool(first.get("thumbs"))
-                  and str(first.get("thumb_url", "")).startswith("/api/"))
-            check("概念缩略图可读取", c.get(first["thumb_url"]).status_code == 200)
+              all((not x.get("pool")) or x["pool"] in pool_kinds for x in items))
+        if items:
+            first = items[0]
+            check("卡片只带封面 ID，不带图片数组",
+                  "cover_image_id" in first and "thumbs" not in first)
+            cov = c.get("/api/concepts/cover", params={"key": first["key"]})
+            cd = cov.json().get("data", {})
+            check("按需封面只返回一张图",
+                  cov.status_code == 200 and cd.get("found") is True
+                  and bool(cd.get("image"))
+                  and str(cd["image"].get("url", "")).startswith("/api/"))
+            if cd.get("image"):
+                check("封面缩略图可读取",
+                      c.get(cd["image"]["url"]).status_code == 200)
+            page = c.get("/api/concepts/images",
+                         params={"key": first["key"], "limit": 50}).json().get("data", {})
+            check("概念详情页首屏上限 50 张",
+                  page.get("found") is True and page.get("limit") <= 50
+                  and len(page.get("items", [])) <= 50,
+                  f"total={page.get('total', 0)} / 返回 {len(page.get('items', []))} 张")
+            check("详情页图片 URL 全部走本服务只读端点",
+                  all(str(x.get("url", "")).startswith("/api/")
+                      for x in page.get("items", [])))
             one = c.get("/api/concepts/thumbs", params={"key": first["key"]})
-            check("单概念反查", one.status_code == 200 and one.json()["data"]["found"])
+            check("旧反查接口兼容且只给一张",
+                  one.status_code == 200 and one.json()["data"]["found"]
+                  and len(one.json()["data"]["thumbs"]) <= 1)
             batch = c.post("/api/concepts/thumbs-batch",
                            json={"keys": [first["key"], "不存在的xyz"], "limit": 2})
-            check("批量概念反查", batch.status_code == 200
+            check("批量概念反查兼容", batch.status_code == 200
                   and len(batch.json()["data"]["items"]) == 2)
             info = c.get("/api/concepts/wall", params={"limit": 3, "kind": "底模"})
-            check("信息类概念按类别查看", info.json()["data"]["total"] >= 1)
+            check("信息类概念按类别查询可用",
+                  info.status_code == 200 and info.json()["ok"] is True,
+                  f"total={info.json().get('data', {}).get('total', 0)}")
+            over = c.get("/api/concepts/images",
+                         params={"key": first["key"], "limit": 500})
+            check("详情页 limit 被拒绝（防一次性拉全库）",
+                  over.status_code in (400, 422) and over.json().get("ok") is False,
+                  f"HTTP {over.status_code}")
 
         print("-- 语义抽卡（索引缺失时验证降级） --")
         sst = c.get("/api/semantics/status").json()["data"]
@@ -333,9 +393,11 @@ def main() -> int:
             sug = c.get("/api/semantics/suggest",
                         params={"q": "厚涂暗色调逆光", "top_k": 4}).json()
             sitems = sug.get("data", {}).get("items", [])
-            check("语义卡片带风格样图与历史出图",
+            check("语义卡片只给风格锚点与历史计数",
                   sug.get("ok") is True and len(sitems) >= 1
-                  and "history" in sitems[0] and bool(sitems[0].get("thumb_url")))
+                  and bool(sitems[0].get("thumb_url"))
+                  and "thumbs" not in sitems[0].get("history", {})
+                  and "image_count" in sitems[0].get("history", {}))
             check("外部风格样图只读分发",
                   c.get("/api/semantics/thumb",
                         params={"index": sitems[0]["index"]}).status_code == 200)
@@ -343,9 +405,10 @@ def main() -> int:
             degraded = c.get("/api/semantics/suggest", params={"q": "厚涂"})
             check("语义索引缺失时降级为 503",
                   degraded.status_code == 503 and degraded.json()["ok"] is False)
+        paths = spec.get("paths", {})
         check("概念与语义端点已注册",
-              "/api/concepts/wall" in spec.get("paths", {})
-              and "/api/semantics/suggest" in spec.get("paths", {}))
+              all(p in paths for p in ("/api/concepts/wall", "/api/concepts/cover",
+                                      "/api/concepts/images", "/api/semantics/suggest")))
 
         print("-- 离线依赖（零下载约定） --")
         req = (ROOT / "requirements.txt").read_text(encoding="utf-8")
@@ -370,6 +433,23 @@ def main() -> int:
         cached = (embed.cache_model_dir() / "model.onnx").is_file()
         check("模型权重已搬入项目（零下载）", embed.is_ready(),
               "缓存副本仍在（可再生）" if cached else "缓存副本已剪切移除")
+
+        print("-- 清空重建与索引重建（方案 C 固定入口） --")
+        reset_src = (ROOT / "scripts" / "reset_db.py").read_text(encoding="utf-8")
+        rebuild_src = (ROOT / "scripts" / "rebuild_concepts.py").read_text(encoding="utf-8")
+        check("清空脚本支持 dry-run 且先备份",
+              "--dry-run" in reset_src and "shutil.copy2" in reset_src
+              and "shutil.move" in reset_src)
+        check("清空只归档、不物理删除",
+              "unlink(" not in reset_src and "os.remove(" not in reset_src
+              and "shutil.rmtree" not in reset_src)
+        check("概念索引可全量重建", "rebuild(" in rebuild_src)
+        check("归档目录不入库",
+              "data/archive/" in (ROOT / ".gitignore").read_text(encoding="utf-8"))
+        mig = (ROOT / "backend" / "migrations" / "versions" /
+               "0001_initial.py").read_text(encoding="utf-8")
+        check("Alembic 基线已重做为 v2 关系模型",
+              'revision = "0001_v2_relational"' in mig)
 
     passed = sum(1 for _n, ok, _d in RESULTS if ok)
     print(f"\n== 汇总: {passed}/{len(RESULTS)} 通过 ==")
