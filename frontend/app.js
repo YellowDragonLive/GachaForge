@@ -97,8 +97,8 @@ function drawForm() {
     `<option value="${r.id}" ${sel(r.id, f.recipe_id)}>${esc(r.name)}</option>`).join('');
   const profileOpts = state.profiles.map((p) =>
     `<option value="${p.id}" ${sel(p.id, f.gen_profile_id)}>${esc(p.name)} · ${esc(p.checkpoint || '未设模型')}</option>`).join('');
-  // 左右排布：设置栏 sticky 常驻，结果在右栏首屏；概念探索是可选增强，
-  // 放到结果下方并做成可折叠，避免全宽面板把「设置 + 结果」挤出首屏。
+  // 左右排布：设置栏 sticky 常驻，结果在右栏；过滤与概念探索收在同一块面板里，
+  // 选完条件主按钮就在下方，不用跨到另一栏去找。
   return `<div class="draw-shell">
     <aside class="draw-side">
     <div class="panel">
