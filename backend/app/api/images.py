@@ -18,9 +18,15 @@ router = APIRouter(prefix="/api/images", tags=["images"])
 
 
 def _safe_file(raw: str) -> Path:
-    root = get_settings().root.resolve()
+    """只允许读取项目目录、配置的输出目录与缩略图目录下的文件。
+
+    输出目录由用户配置，可能在项目之外（例如大图放别的盘），
+    因此不能只校验项目根；但也不能放行任意路径，避免路径穿越读文件。
+    """
+    s = get_settings()
     p = Path(raw).resolve()
-    if (root not in p.parents and p != root) or not p.is_file():
+    allowed = (s.root.resolve(), s.outputs_dir.resolve(), s.thumbs_dir.resolve())
+    if not p.is_file() or not any(base == p or base in p.parents for base in allowed):
         raise HTTPException(status_code=404, detail="image not found")
     return p
 
