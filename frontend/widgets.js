@@ -190,3 +190,141 @@ export function slotRowsHtml(slots, pools, hotTags) {
     <button type="button" class="btn small danger" data-act="slot-del" data-i="${i}">移除</button>
   </div>`).join('');
 }
+
+// ---------------- 通用概念缩略图卡片 ----------------
+// 抽象概念一律先用图判断：画师 / tag / 动作 / 角色 / 底模 / LoRA / 配方都走同一套卡片。
+// 缩略图主要来自抽卡数据库已有的真实出图，风格锚点作为补充；点选即写入过滤条件。
+const safeUrl = (u) => {
+  const s = String(u || '');
+  return s.startsWith('/api/') ? s : '';   // 只接受本服务只读图片端点
+};
+
+export function normalizeConcepts(raw) {
+  const rows = Array.isArray(raw) ? raw : [];
+  const seen = new Set();
+  const out = [];
+  for (const c of rows) {
+    if (!c || typeof c !== 'object') continue;
+    const key = String(c.key ?? c.label ?? '').trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const thumbs = (Array.isArray(c.thumbs) ? c.thumbs : [])
+      .map((t) => ({ id: (t && t.id) || '', url: safeUrl(t && t.url) }))
+      .filter((t) => t.url);
+    const fallback = safeUrl(c.thumb_url);
+    out.push({
+      key, label: String(c.label ?? key), kind: String(c.kind ?? '概念'),
+      pool: String(c.pool ?? ''), filterable: c.filterable !== false,
+      image_count: Number(c.image_count ?? 0) || 0,
+      draw_count: Number(c.draw_count ?? 0) || 0,
+      thumbs: thumbs.length ? thumbs : (fallback ? [{ id: '', url: fallback }] : []),
+      thumb_url: fallback,
+    });
+  }
+  return out;
+}
+
+/** 单张概念卡：叠放最多 3 张真实代表图，文字只是辅助说明。 */
+export function conceptCardHtml(c, selected = false) {
+  const row = normalizeConcepts([c])[0] || { key: '', label: '', kind: '概念', pool: '', filterable: true, image_count: 0, thumbs: [] };
+  const cover = row.thumbs.slice(0, 3);
+  const act = row.filterable
+    ? `data-act="concept-pick" data-v="${esc(row.key)}" data-pool="${esc(row.pool)}"`
+    : (cover[0] && cover[0].id ? `data-act="img-open" data-id="${esc(cover[0].id)}"` : '');
+  const hint = row.filterable ? '点一下加入过滤' : '点一下看大图';
+  const scope = row.filterable ? (row.pool ? `按 ${row.pool} 池` : '全局') : '仅展示';
+  return `<div class="concept-card${selected ? ' picked' : ''}" data-key="${esc(row.key)}">
+    <button type="button" class="concept-hit" ${act} ${act ? '' : 'disabled'}
+      title="${esc(row.label)} · ${esc(row.kind)} · ${row.image_count} 张真实出图 · ${hint}">
+      <span class="concept-imgs count-${cover.length}">
+        ${cover.length
+          ? cover.map((t) => `<img src="${esc(t.url)}" alt="${esc(row.label)} 的样图" loading="lazy">`).join('')
+          : '<span class="concept-nopic">暂无样图</span>'}
+      </span>
+      <span class="concept-meta">
+        <span class="concept-name">${esc(cut(row.label, 26))}</span>
+        <span class="concept-kind">${esc(row.kind)} · ${esc(scope)}</span>
+        <span class="concept-count">${row.image_count} 张出图 / ${row.draw_count} 次抽到</span>
+      </span>
+    </button>
+  </div>`;
+}
+
+export function conceptCardsHtml(cards, opts = {}) {
+  const rows = normalizeConcepts(cards);
+  if (!rows.length) {
+    return '<div class="hint concept-empty">数据库里还没有已出图的概念 · 先抽几次卡，这里会自动长出样图</div>';
+  }
+  const sel = new Set((opts.selectedKeys || []).map((x) => String(x).toLowerCase()));
+  return `<div class="concept-wall">${rows.map((c) =>
+    conceptCardHtml(c, sel.has(c.key.toLowerCase()))).join('')}</div>`;
+}
+
+export function conceptKindChipsHtml(kinds, selected) {
+  const rows = (Array.isArray(kinds) ? kinds : []).filter((k) => k && k.kind);
+  const cur = String(selected ?? '');
+  const chip = (v, label, count) => `<button type="button" class="chip hot${String(v) === cur ? ' on' : ''}"
+    data-act="concept-kind" data-v="${esc(v)}">${esc(label)}${count ? ' · ' + Number(count) : ''}</button>`;
+  return chip('', '全部') + rows.map((k) => chip(k.kind, k.kind, k.count)).join('');
+}
+
+/** 语义检索结果：外部风格锚点 + 我自己出过的图叠在一起，由眼睛做最终判断。 */
+export function semanticCardsHtml(items) {
+  const rows = (Array.isArray(items) ? items : []).filter((x) => x && x.name);
+  if (!rows.length) {
+    return '<div class="hint">输入一句想要的感觉来找画师，或直接看下方数据库概念墙</div>';
+  }
+  return `<div class="concept-wall semantic-wall">${rows.map((x) => {
+    const anchor = safeUrl(x.thumb_url);
+    const hist = (x.history && Array.isArray(x.history.thumbs) ? x.history.thumbs : [])
+      .map((t) => safeUrl(t && t.url)).filter(Boolean).slice(0, 2);
+    const imgs = [anchor, ...hist].filter(Boolean).slice(0, 3);
+    const reasons = (Array.isArray(x.reason) ? x.reason : [])
+      .map((r) => String((r && r.tag) || '')).filter(Boolean).slice(0, 3);
+    const badges = [x.core && '核心', x.selected && '精选', x.favorite && '收藏'].filter(Boolean);
+    const count = (x.history && x.history.image_count) || 0;
+    return `<div class="concept-card semantic-card">
+      <button type="button" class="concept-hit" data-act="semantic-pick" data-v="${esc(x.name)}"
+        title="点一下按画师过滤：画师:${esc(x.name)}">
+        <span class="concept-imgs count-${imgs.length}">
+          ${imgs.length
+            ? imgs.map((u, i) => `<img src="${esc(u)}" alt="${esc(x.name)} ${i === 0 ? '风格锚点' : '我的出图'}" loading="lazy">`).join('')
+            : '<span class="concept-nopic">暂无样图</span>'}
+        </span>
+        <span class="concept-meta">
+          <span class="concept-name">${esc(cut(x.name, 24))}</span>
+          <span class="concept-kind">${esc(badges.join(' · ') || '画师')}</span>
+          <span class="concept-count">${esc(reasons.join(' / ') || (count ? `我用它出过 ${count} 张` : '风格参考'))}</span>
+        </span>
+      </button>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+/** 抽卡结果卡：把本次抽到的概念映射成历史真实出图小图，零额外请求。 */
+export function conceptStripHtml(detail, thumbMap) {
+  const map = thumbMap && typeof thumbMap === 'object' ? thumbMap : {};
+  const rows = Array.isArray(detail) ? detail : [];
+  const out = [];
+  const seen = new Set();
+  for (const s of rows) {
+    if (!s || typeof s !== 'object') continue;
+    const tags = Array.isArray(s.tags) ? s.tags
+      : (typeof s.tags === 'string' ? [s.tags] : []);
+    for (const t of tags) {
+      for (const part of String(t).split(/[,，]/)) {
+        const k = String(part).replace(/\\/g, '').trim().toLowerCase();
+        const url = map[k];
+        if (url && k.length >= 3 && !seen.has(k)) {
+          seen.add(k); out.push({ key: k, url: safeUrl(url) });
+        }
+        if (out.length >= 6) break;
+      }
+      if (out.length >= 6) break;
+    }
+    if (out.length >= 6) break;
+  }
+  if (!out.length) return '';
+  return `<div class="concept-strip">${out.map((x) =>
+    `<img src="${esc(x.url)}" alt="${esc(x.key)} 的真实出图" title="${esc(x.key)}" loading="lazy">`).join('')}</div>`;
+}

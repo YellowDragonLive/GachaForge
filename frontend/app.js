@@ -5,6 +5,7 @@ import {
   parseFilterSpec, addFilter, removeFilter, filterChipsHtml, hotTagChipsHtml,
   poolOptionsHtml, tagOptionsHtml, normalizeLoras, loraOptionsHtml, loraRowsHtml,
   normalizeSlots, slotRowsHtml, slotPoolOptionsHtml,
+  conceptCardsHtml, conceptKindChipsHtml, semanticCardsHtml, conceptStripHtml,
 } from './widgets.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -23,6 +24,10 @@ const state = {
   // 可选控件的编辑态：过滤构造器 / LoRA 列表 / 配方槽位表
   filterPool: null, filterTagQ: '', tagOptions: [], hotTags: [],
   loraDraft: [], slotsDraft: [],
+  // 概念缩略图：数据库驱动的概念墙 + 本地语义检索（索引未构建时静默降级）
+  concepts: { items: [], kinds: [], kind: '', q: '', image_count: 0, loaded: false },
+  semantics: { ready: null, reason: '', items: [], q: '', mode: '' },
+  conceptThumbMap: {},
 };
 
 let toastTimer = null;
@@ -80,7 +85,7 @@ function drawForm() {
     `<option value="${r.id}" ${sel(r.id, f.recipe_id)}>${esc(r.name)}</option>`).join('');
   const profileOpts = state.profiles.map((p) =>
     `<option value="${p.id}" ${sel(p.id, f.gen_profile_id)}>${esc(p.name)} · ${esc(p.checkpoint || '未设模型')}</option>`).join('');
-  return `<div class="grid-2">
+  return `${conceptPanel()}<div class="grid-2">
     <div class="panel">
       <div class="panel-head"><h2>抽卡设置</h2><span class="sub">${state.pools.length} 个卡池</span></div>
       <div class="field"><span>配方</span><select id="dRecipe"><option value="" ${sel('', f.recipe_id)}>（不用配方 · 全池随机）</option>${recipeOpts}</select></div>
@@ -148,6 +153,110 @@ function updateFilterHint() {
   const text = filterHintText();
   el.textContent = text;
   el.hidden = !text;
+}
+
+// ---------------- 通用概念缩略图：抽卡时先看图再选 ----------------
+const FEEL_PRESETS = ['黄昏逆光、有点忧郁的校园少女', '厚涂暗色调',
+  '萌系水彩治愈', '精致水光肌韩系'];
+let conceptTimer = null;
+
+function semanticHintHtml() {
+  const s = state.semantics;
+  if (s.ready === false) {
+    return `<div class="hint">语义索引未就绪（${esc(s.reason || '尚未构建')}）· 下方数据库概念墙不受影响</div>`;
+  }
+  return '';
+}
+
+function conceptPanel() {
+  const c = state.concepts;
+  const selectedKeys = parseFilterSpec(state.form.filter).map((r) => r.tag.toLowerCase());
+  const feels = FEEL_PRESETS.map((f) =>
+    `<button type="button" class="chip hot" data-act="feel-chip" data-v="${esc(f)}">${esc(f)}</button>`).join('');
+  return `<div class="panel concept-panel">
+    <div class="panel-head"><h2>看图选概念</h2>
+      <span class="sub">抽象概念用真实出图判断 · ${c.image_count} 张历史图 · 点缩略图即加入过滤</span></div>
+    <div class="semantic-bar">
+      <input type="text" id="semanticQ" value="${esc(state.semantics.q)}"
+        placeholder="想要的感觉：一句话描述画风，本地语义检索（可留空）">
+      <button class="btn small primary" data-act="semantic-go">找画师</button>
+      <button class="btn small" data-act="semantic-clear">清空</button>
+    </div>
+    <div class="hot-tags"><span class="hint">试着点一个：</span>${feels}</div>
+    <div id="semanticHint">${semanticHintHtml()}</div>
+    <div id="semanticCards">${semanticCardsHtml(state.semantics.items)}</div>
+    <div class="concept-bar">
+      <span class="hint">数据库里抽过的概念</span>
+      <input type="text" id="conceptQ" value="${esc(c.q)}"
+        placeholder="搜概念名（也可留空浏览）" style="max-width:240px">
+      <button class="btn small" data-act="concept-refresh">刷新</button>
+    </div>
+    <div class="hot-tags" id="conceptKinds">${conceptKindChipsHtml(c.kinds, c.kind)}</div>
+    <div id="conceptWall">${conceptCardsHtml(c.items.slice(0, 12), { selectedKeys })}</div>
+  </div>`;
+}
+
+function syncConceptPanel() {
+  const selectedKeys = parseFilterSpec(state.form.filter).map((r) => r.tag.toLowerCase());
+  const wall = $('#conceptWall');
+  if (wall) wall.innerHTML = conceptCardsHtml(state.concepts.items.slice(0, 12), { selectedKeys });
+  const kinds = $('#conceptKinds');
+  if (kinds) kinds.innerHTML = conceptKindChipsHtml(state.concepts.kinds, state.concepts.kind);
+  const sem = $('#semanticCards');
+  if (sem) sem.innerHTML = semanticCardsHtml(state.semantics.items);
+  const hint = $('#semanticHint');
+  if (hint) hint.innerHTML = semanticHintHtml();
+}
+
+/** 概念墙完全由数据库驱动，不依赖语义索引 / 外部项目 / 任何 AI 服务。 */
+async function loadConcepts() {
+  const p = new URLSearchParams({ limit: '60', thumbs: '2' });
+  if (state.concepts.kind) p.set('kind', state.concepts.kind);
+  if (state.concepts.q) p.set('q', state.concepts.q);
+  try {
+    const d = await api.get('/api/concepts/wall?' + p.toString());
+    state.concepts.items = d.items || [];
+    state.concepts.kinds = d.kinds || [];
+    state.concepts.image_count = d.image_count || 0;
+    state.concepts.loaded = true;
+    // 结果卡的槽位小图复用同一份映射，不额外发请求
+    const map = {};
+    for (const x of state.concepts.items) {
+      const url = (x.thumbs && x.thumbs[0] && x.thumbs[0].url) || x.thumb_url;
+      if (url) map[String(x.key).toLowerCase()] = url;
+    }
+    state.conceptThumbMap = map;
+    syncConceptPanel();
+  } catch (_) { /* 概念墙是增强能力，失败不阻塞抽卡主流程 */ }
+}
+
+async function loadSemantics(q = '') {
+  state.semantics.q = q;
+  try {
+    const d = await api.get('/api/semantics/suggest?'
+      + new URLSearchParams({ q, top_k: '12' }).toString());
+    state.semantics.items = d.items || [];
+    state.semantics.mode = d.mode || '';
+    state.semantics.ready = true;
+  } catch (err) {
+    state.semantics.items = [];
+    state.semantics.ready = false;
+    state.semantics.reason = friendlyError(err);
+  }
+  syncConceptPanel();   // 只更新面板，不重绘整页，避免打断表单输入
+}
+
+async function loadSemanticsStatus() {
+  try {
+    const d = await api.get('/api/semantics/status');
+    state.semantics.ready = !!d.ready;
+    if (!d.ready) state.semantics.reason = d.reason || '索引未构建';
+    return state.semantics.ready;
+  } catch (_) {
+    state.semantics.ready = false;
+    state.semantics.reason = '语义服务不可用';
+    return false;
+  }
 }
 
 // ---------------- 点选控件：数据加载与局部刷新 ----------------
@@ -226,6 +335,7 @@ function drawCard(d) {
     <div class="card-head"><b>第 ${d.idx} 抽</b><span>seed ${esc(d.seed ?? '随机')} · #${d.id}</span></div>
     <textarea data-prompt="${d.id}" id="prompt_${d.id}">${esc(d.prompt)}</textarea>
     <div class="tags">${chips || '<span class="hint">无槽位明细</span>'}</div>
+    ${conceptStripHtml(d.detail, state.conceptThumbMap)}
     <div class="hint">此处编辑用于复制调整；生图使用抽卡时保存的快照，保证同 seed 可复现。</div>
     <div class="row" style="margin-top:10px">
       <button class="btn small" data-act="copy" data-id="${d.id}">复制</button>
@@ -597,7 +707,32 @@ async function onClick(e) {
       case 'filter-del':
         setFilterSpec(removeFilter(state.form.filter, i)); break;
       case 'filter-clear':
-        setFilterSpec(''); break;
+        setFilterSpec(''); syncConceptPanel(); break;
+      // --- 通用概念缩略图：点图即选，沿用已有过滤构造器 ---
+      case 'concept-pick':
+        setFilterSpec(addFilter(state.form.filter, btn.dataset.pool || '', btn.dataset.v));
+        syncConceptPanel();
+        done(`已加入过滤：${(btn.dataset.pool ? btn.dataset.pool + ':' : '') + btn.dataset.v}`);
+        break;
+      case 'concept-kind':
+        state.concepts.kind = btn.dataset.v || '';
+        syncConceptPanel(); await loadConcepts(); break;
+      case 'concept-refresh':
+        await loadConcepts(); done('概念墙已刷新'); break;
+      case 'feel-chip': {
+        const el = $('#semanticQ'); if (el) el.value = btn.dataset.v;
+        await loadSemantics(btn.dataset.v); break;
+      }
+      case 'semantic-go':
+        await loadSemantics($('#semanticQ')?.value.trim() || ''); break;
+      case 'semantic-clear': {
+        const el = $('#semanticQ'); if (el) el.value = '';
+        await loadSemantics(''); break;
+      }
+      case 'semantic-pick':
+        setFilterSpec(addFilter(state.form.filter, '画师', btn.dataset.v));
+        syncConceptPanel();
+        done(`已按画师过滤：${btn.dataset.v}`); break;
       case 'draw-clear':
         state.draws = []; state.session = null; state.warnings = [];
         sessionStorage.setItem(LAST_SESSION_KEY, '0');
@@ -776,6 +911,11 @@ function onInput(e) {
     state.filterTagQ = t.value;
     loadTagOptions(state.filterPool, t.value.trim(), true);
   }
+  if (t.id === 'conceptQ') {
+    state.concepts.q = t.value;
+    clearTimeout(conceptTimer);
+    conceptTimer = setTimeout(() => loadConcepts(), 250);
+  }
   // 槽位表格：只更新草稿与高级 JSON，不重绘（避免输入框失焦）
   if (t.dataset.slot) {
     const idx = Number(t.dataset.i), key = t.dataset.slot;
@@ -872,6 +1012,12 @@ async function boot() {
     await restoreLastDraw();
     startStream();
     await onRoute();
+    // 概念墙不依赖任何 AI 服务，始终加载；语义索引未构建时只显示一行降级提示
+    loadConcepts();
+    loadSemanticsStatus().then(async (ready) => {
+      if (ready) await loadSemantics('');
+      else syncConceptPanel();
+    });
   } catch (err) {
     view.innerHTML = `<div class="panel err-text">初始化失败：${esc(friendlyError(err))}<br>
       请确认 start.bat 正在运行，并刷新页面重试。</div>`;
