@@ -11,7 +11,7 @@ import { friendlyError } from '../api.js';
 import { esc } from '../detail.js';
 import { state } from '../store.js';
 import { $, view, fail } from './ui.js';
-import { unmountVue } from '../vue/host.js';
+import { getMountedApp, unmountVue } from '../vue/host.js';
 
 export const VIEWS = ['draw', 'pools', 'recipes', 'jobs', 'gallery', 'settings'];
 
@@ -26,10 +26,13 @@ export function registerView(name, render) {
 export async function refresh(name, ...args) {
   const render = renderers.get(name);
   if (!render) return;
-  // 切换视图前先卸载上一屏的 Vue 实例：老视图靠 `view.innerHTML = ...` 接管 #view，
-  // 不清掉的话 Vue 会继续对着已被替换的节点打补丁。这里也是唯一的路口，视图不用各自处理。
-  unmountVue();
-  return render(...args);
+  // Vue 实例的卸载放在渲染**之后**：原生视图要 await 接口（设置页拉模型列表可能几秒），
+  // 先卸载会把上一屏直接清空，用户就看到一片白。等新视图把 #view 换掉再收尾，
+  // 老内容就能一直显示到新内容就绪为止。渲染期间若又挂了新的 Vue 视图，就跳过（不是同一个实例）。
+  const before = getMountedApp();
+  const out = await render(...args);
+  if (before && getMountedApp() === before) unmountVue();
+  return out;
 }
 
 export function setNav(v) {

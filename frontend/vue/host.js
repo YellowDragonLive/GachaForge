@@ -34,3 +34,6 @@ export function unmountVue() {
 }
 
 export const isVueMounted = () => current !== null;
+
+/** 当前挂的 app 实例（给 router 判断「渲染完还是不是同一个」，避免误卸载刚挂上的那个）。 */
+export const getMountedApp = () => current?.app ?? null;

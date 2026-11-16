@@ -9,7 +9,7 @@ import { loadTagOptions, setFilterSpec, filterTagQInput } from './features/filte
 import { renderPools } from './views/pools.js';
 import { renderRecipes } from './views/recipes.js';
 import { renderJobs, refreshJobsBody, setStreamState } from './views/jobs.js';
-import { renderGallery } from './views/gallery.js';
+import { renderGallery, refreshGallery } from './views/gallery.js';
 import { renderSettings } from './views/settings.js';
 import { renderDraw, updateDrawCard, refreshDrawStates, paintStars,
   readDrawForm, restoreForm, restoreLastDraw } from './views/draw.js';
@@ -81,12 +81,18 @@ async function rateImage(btn, body) {
       if (rating !== null) im.rating = rating;
       if (fav !== null) im.favorite = fav;
     }
-    if (rating !== null) paintStars(id, rating);
-    if (fav !== null) {
-      document.querySelectorAll(`[data-act="img-fav"][data-id="${id}"]`).forEach((b) => {
-        b.dataset.v = fav ? 0 : 1;
-        b.textContent = fav ? '★ 已收藏' : '☆ 收藏';
-      });
+    if (state.view === 'gallery') {
+      // 画廊是 Vue 视图：改了 state.images 就够，DOM 由它重绘
+      refreshGallery();
+    } else {
+      // 抽卡台 / 概念页还是原生视图：局部打补丁，别整页重绘
+      if (rating !== null) paintStars(id, rating);
+      if (fav !== null) {
+        document.querySelectorAll(`[data-act="img-fav"][data-id="${id}"]`).forEach((b) => {
+          b.dataset.v = fav ? 0 : 1;
+          b.textContent = fav ? '★ 已收藏' : '☆ 收藏';
+        });
+      }
     }
     const did = Number(btn.dataset.draw);
     if (state.view === 'draw' && did) updateDrawCard(did);
@@ -161,13 +167,6 @@ function onChange(e) {
     return;
   }
   if (t.dataset && t.dataset.act === 'asm-pool') { asmPoolChange(t); return; }
-  if (t.id === 'gFav' || t.id === 'gOrigin' || t.id === 'gRating') {
-    state.gallery = {
-      favorite: $('#gFav').value, origin: $('#gOrigin').value,
-      min_rating: Number($('#gRating').value),
-    };
-    renderGallery().catch(fail);
-  }
   if (t.id === 'dFilterPool') {
     state.filterPool = t.value;
     readDrawForm();

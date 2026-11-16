@@ -865,8 +865,9 @@ const cases = [
   ['画师接线：场景面板与卡池搜索都真接上了', () => {
     const app = frontendSrc();
     assert.match(app, /part\('artist', '画师'/, '场景面板要画出画师格');
-    assert.match(app, /data-qtext="\$\{esc\(poolSearchText\(p\)\)\}/, '卡池页搜索要带别名');
-    assert.match(app, /matchQuery\(poolSearchText\(p\), q\)/, '池下拉要按别名筛');
+    // 卡池页已换成 Vue：搜索从「逐行藏 DOM」变成计算属性过滤，判据跟着改成「用 poolSearchText 参与匹配」
+    assert.match(app, /matchQuery\(poolSearchText\(p\)[^)]*\),/, '卡池页搜索要带别名');
+    assert.match(app, /filteredPools/, '命中结果要由计算属性产出，不再逐行改样式');
     const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
     assert.match(css, /grid-template-areas: "bg style" "stage stage" "artist comp"/,
       '画师格与构图并排，不挤掉画布');
