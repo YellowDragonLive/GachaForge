@@ -169,6 +169,10 @@ def run_recipe(recipe: dict[str, Any], all_pools: list[PoolData], rng) -> dict:
         filtered = apply_filter_spec(pools, slot.get("filter", ""))
         free = str(slot.get("free") or "").strip()
         pick = str(slot.get("pick") or "").strip()
+        # 意群归属与三态：从 definition 一路透传到 detail，再存进关系表。
+        # 以前只靠 pool 字符串前缀（任意值·P1）表达，刷新页面就丢。
+        group_key = str(slot.get("group") or "").strip()
+        slot_mode = str(slot.get("mode") or "").strip()
         locked: list[str] = []
         if free:
             # 手填的任意值：不查池子，也不吃 filter。池里没有的东西一样要能用——
@@ -192,6 +196,9 @@ def run_recipe(recipe: dict[str, Any], all_pools: list[PoolData], rng) -> dict:
         if tags:
             parts.extend(tags)
             item = {"slot": name, "tags": tags}
+            if group_key:
+                item["group"] = group_key
+                item["mode"] = slot_mode
             if locked:
                 item["locked"] = locked[0]
             if free:
