@@ -119,6 +119,24 @@ export function declaredNames(code) {
   return names;
 }
 
+/** 从 `(` 开始找配对的 `)`，看紧跟其后的是不是 `{`——是的话说明这是方法定义，不是调用。 */
+function isMethodShorthand(src, openParen) {
+  let depth = 0;
+  for (let i = openParen; i < src.length; i += 1) {
+    const c = src[i];
+    if (c === '(') depth += 1;
+    else if (c === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        let j = i + 1;
+        while (j < src.length && /\s/.test(src[j])) j += 1;
+        return src[j] === '{';
+      }
+    }
+  }
+  return false;
+}
+
 /** 返回未解析的调用名列表：[{ name, count }] */
 export function unresolvedCalls(code) {
   const clean = stripNonCode(code);
@@ -127,6 +145,8 @@ export function unresolvedCalls(code) {
   for (const m of clean.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {
     const name = m[1];
     if (KEYWORDS.has(name) || BROWSER_GLOBALS.has(name) || declared.has(name)) continue;
+    // `setup() {` / `data() {` 这类对象方法简写不是调用：跳过（括号后面直接跟花括号）。
+    if (isMethodShorthand(clean, m.index + m[0].length - 1)) continue;
     missing.set(name, (missing.get(name) || 0) + 1);
   }
   return [...missing].map(([name, count]) => ({ name, count }));

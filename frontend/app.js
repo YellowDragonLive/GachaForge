@@ -8,7 +8,7 @@ import { onQuickFilterInput, onQuickFilterKey } from './features/quickfilter.js'
 import { loadTagOptions, setFilterSpec, filterTagQInput } from './features/filter.js';
 import { renderPools } from './views/pools.js';
 import { renderRecipes } from './views/recipes.js';
-import { renderJobs, refreshJobsBody } from './views/jobs.js';
+import { renderJobs, refreshJobsBody, setStreamState } from './views/jobs.js';
 import { renderGallery } from './views/gallery.js';
 import { renderSettings } from './views/settings.js';
 import { renderDraw, updateDrawCard, refreshDrawStates, paintStars,
@@ -227,8 +227,13 @@ function startStream() {
       renderGallery().catch(fail);
     }
   }, (ok) => {
-    const el = $('#streamState');
-    if (el) el.textContent = ok ? 'SSE 实时连接' : 'SSE 断开，重连中…';
+    // 任务页是 Vue 视图，状态走 ref（直接改 DOM 会被下一次重绘盖掉）；
+    // 抽卡台还是原生视图，保留原地写 textContent 的老路子。
+    setStreamState(ok);
+    if (state.view !== 'jobs') {
+      const el = $('#streamState');
+      if (el) el.textContent = ok ? 'SSE 实时连接' : 'SSE 断开，重连中…';
+    }
   });
 }
 

@@ -45,3 +45,8 @@ venv/
 temp/
 
 data/vocab/
+
+# 前端第三方代码要进 git（例：frontend/vendor/vue.esm-browser.prod.js）。
+# 根上的 vendor/ 是「本机依赖 / 模型权重」，不进 git；两者同名但性质不同，所以单独开例外。
+!frontend/vendor/
+!frontend/vendor/**

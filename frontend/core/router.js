@@ -11,6 +11,7 @@ import { friendlyError } from '../api.js';
 import { esc } from '../detail.js';
 import { state } from '../store.js';
 import { $, view, fail } from './ui.js';
+import { unmountVue } from '../vue/host.js';
 
 export const VIEWS = ['draw', 'pools', 'recipes', 'jobs', 'gallery', 'settings'];
 
@@ -25,6 +26,9 @@ export function registerView(name, render) {
 export async function refresh(name, ...args) {
   const render = renderers.get(name);
   if (!render) return;
+  // 切换视图前先卸载上一屏的 Vue 实例：老视图靠 `view.innerHTML = ...` 接管 #view，
+  // 不清掉的话 Vue 会继续对着已被替换的节点打补丁。这里也是唯一的路口，视图不用各自处理。
+  unmountVue();
   return render(...args);
 }
 

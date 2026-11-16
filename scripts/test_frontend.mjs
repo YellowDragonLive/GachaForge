@@ -12,8 +12,11 @@ const jsFiles = [];
 (function walk(dir) {
   for (const n of readdirSync(dir)) {
     const fp = dir + '/' + n;
-    if (statSync(fp).isDirectory()) walk(fp);
-    else if (n.endsWith('.js')) jsFiles.push(fp);
+    if (statSync(fp).isDirectory()) {
+      // vendor/ 是第三方代码（Vue 的 ESM 版），不参与"接线/引用"这类自家代码的契约检查
+      if (n === 'vendor') continue;
+      walk(fp);
+    } else if (n.endsWith('.js')) jsFiles.push(fp);
   }
 })(fileURLToPath(new URL('../frontend', import.meta.url)));
 const frontendSrc = () => jsFiles.map((f) => readFileSync(f, 'utf8')).join('\n');
