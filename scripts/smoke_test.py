@@ -226,6 +226,25 @@ def main() -> int:
         check("预设·清理测试配方",
               all(x["id"] != ref["id"] for x in c.get("/api/recipes").json()["data"]))
 
+        # 超重权重：池子里的原文要留着（用户要看原貌），只在写进 prompt 那一刻剥
+        cloth = c.get("/api/pools/items", params={
+            "kind": "服装", "pool": "组合预设/服装-女性复杂穿戴", "limit": 40}).json()["data"]
+        raw = [i["tags"] for i in cloth["items"] if ":1." in (i["tags"] or "")]
+        check("池子条目保留原始权重（运行期清理，不写库）",
+              bool(raw), f"{len(raw)} 条带 :1.x 原文")
+        pv = c.post("/api/recipes/preview", params={"pulls": 3, "seed": 11}, json={
+            "fixed_head": "(masterpiece:1.5), best quality",
+            "count_tags": "1girl",
+            "slots": [{"pool": "组合预设/服装-女性复杂穿戴", "count": 2, "weight": 1.0}],
+        }).json()["data"]
+        prompts = [p["prompt"] for p in pv]
+        check("组装 prompt 时剥掉超重权重",
+              bool(prompts) and not any(":1." in x for x in prompts),
+              prompts[0][:70] if prompts else "无")
+        check("明细留痕 stripped_weight + 原文（能对照）",
+              any(it.get("stripped_weight") and it.get("raw_tags")
+                  for p in pv for it in p.get("detail", [])))
+
         # 点选控件的数据源：路由必须排在 /{pool_id} 之前，否则会被 int 校验吞掉变 422
         hot = c.get("/api/pools/tag-suggest?limit=20")
         hot_data = hot.json()["data"] if hot.status_code == 200 else {}

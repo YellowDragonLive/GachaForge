@@ -653,8 +653,7 @@ const cases = [
     assert.equal((html.match(/data-act="asm-pick-pool"/g) || []).length, 2,
       'chip 数量要受 limit 控制');
   }],
-  ['池选择接线：选择器渲染 chip 行、默认落在最佳池', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+  ['池选择接线：选择器渲染 chip 行、默认落在最佳池', () => {    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
     assert.match(app, /poolChipsHtml\(state\.pools/, '选择器要渲染匹配池 chip 行');
     assert.match(app, /case 'asm-pick-pool'/, '点 chip 要有事件');
     assert.match(app, /rankPools\(state\.pools[\s\S]{0,120}item_count/,
@@ -704,6 +703,22 @@ const cases = [
     assert.match(py, /def _q_clauses/, '后端搜索要分词 AND，与前端 matchQuery 同语义');
     assert.match(py, /replace\(func\.lower\(PoolItem\.tags\), "_", " "\)/,
       '后端也要把下划线归一成空格');
+  }],
+  ['超重权重：只在组装 prompt 时剥，池子文本不动', () => {
+    const recipes = readFileSync(new URL('../backend/app/core/recipes.py', import.meta.url), 'utf8');
+    const poolsPy = readFileSync(new URL('../backend/app/core/pools.py', import.meta.url), 'utf8');
+    assert.match(recipes, /from \.weights import strip_weights/, '配方抽卡要复用同一套剥离规则');
+    assert.match(recipes, /strip_weights\(part\)/, 'run_recipe 要对每个 part 剥离');
+    assert.match(recipes, /raw_tags/, '明细要留原文，能对照「这条为什么少了 :1.2」');
+    assert.match(poolsPy, /strip_weights\(p\)/, '手工卡片出口 build_prompt 也要剥');
+    // 反向断言：这两处以外不许悄悄改池子文本（抄到服务层去写库就错了）
+    assert.ok(!/pool_items\s*\.\s*update|update\(pool_items\)/.test(recipes),
+      '组装链路不许写库改条目');
+    const clean = readFileSync(new URL('./clean_weights.py', import.meta.url), 'utf8');
+    assert.match(clean, /--apply/, '审计脚本写库要显式 --apply');
+    assert.match(clean, /这不写库|不需要写库/, '默认路径要说明「不用写库，出图时自动净化」');
+    const detailJs = readFileSync(new URL('../frontend/detail.js', import.meta.url), 'utf8');
+    assert.match(detailJs, /stripped_weight/, '装配明细要说明这条的权重被剥了（否则像抽错）');
   }],
 ];
 

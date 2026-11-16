@@ -28,6 +28,9 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from backend.app.core.weights import strip_weights  # noqa: E402
 
 
 def pretty(obj) -> str:
@@ -37,7 +40,10 @@ def pretty(obj) -> str:
 class Client:
     def __init__(self, base: str):
         self.base = base.rstrip("/")
-        self.http = httpx.Client(base_url=self.base, timeout=60.0)
+        # trust_env=False：本机服务不能走系统代理。httpx 默认会吃 http_proxy，
+        # 打 127.0.0.1 时被代理截走，表现为「请求成功但拿回空结果」，
+        # 排查起来像服务端 bug（实测轮询一直读不到刚出图的任务）。
+        self.http = httpx.Client(base_url=self.base, timeout=60.0, trust_env=False)
 
     def get(self, path: str, **params):
         r = self.http.get(path, params=params or None)
@@ -142,7 +148,10 @@ def main() -> int:
         problems.append(f"人数 tag「1girl」出现 {low.count('1girl')} 次（应为 1）")
     for tag in [str(role["tags"]).split(",")[0].strip(),
                 str(hair["tags"]).split(",")[0].strip()]:
-        if tag and tag.lower() not in low:
+        # 池子里可能带手写权重（`(closed collar…:1.2)`），prompt 里是剥过的版本，
+        # 比对也要比剥过的：否则「清理生效」反而被当成「锁定 tag 没进 prompt」。
+        want = strip_weights(tag).strip().strip("([{ ").strip()
+        if want and want.lower() not in low:
             problems.append(f"锁定的 tag「{tag}」没进 prompt")
     locked = [x.get("locked") for x in draw.get("detail") or [] if x.get("locked")]
     if len(locked) < 2:
@@ -151,6 +160,11 @@ def main() -> int:
     dupes = sorted({t for t in tags if tags.count(t) > 1})
     if dupes:
         problems.append("prompt 里有重复 tag：" + "、".join(dupes))
+    # 条目自带的手写权重必须在出图前剥掉（池子文本不改，prompt 要干净）
+    leftover = [t for t in prompt.split(",")
+                if strip_weights(t.strip()) != t.strip()]
+    if leftover:
+        problems.append("prompt 里还有手写权重：" + "、".join(leftover[:3]))
     if problems:
         print("✗ prompt 核对失败：" + "；".join(problems))
         return 1
@@ -182,6 +196,7 @@ def main() -> int:
         time.sleep(2)
     if not images:
         print(f"✗ 等了 {args.wait}s 还没出图（job 状态 {job and job.get('status')}）")
+        print(f"   最后一次 /api/draws/status 返回 {len(rows)} 行：{str(rows)[:300]}")
         return 1
     step(6, total, f"出图成功：{len(images)} 张，用时 {int(time.time() - t0)}s")
 
