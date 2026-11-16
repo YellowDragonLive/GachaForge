@@ -28,7 +28,12 @@ export function applyQuickFilter(el, q) {
     // 不用再点开确认。已有选择的场合不抢（Enter 才是明确的「就选这个」）。
     if (!el.value) {
       const hit = [...el.options].find((o) => !o.hidden && o.value);
-      if (hit) el.value = hit.value;
+      if (hit) {
+        // 派发 change：Vue 组件的 v-model 只监听 DOM 事件，直接改 el.value 它会不知道，
+        // 于是「下拉显示 neg4all、草稿里还是空」，保存下去就是空 checkpoint。
+        el.value = hit.value;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
     }
   } else {
     for (const k of el.querySelectorAll('[data-qtext]')) {

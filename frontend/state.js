@@ -33,7 +33,8 @@ export function createState() {
     form: { recipe_id: '', pulls: 3, count: 1, seed: '', filter: '',
       gen_profile_id: '', filterMode: 'pool' },
     filterPool: null, filterTagQ: '', tagOptions: [], hotTags: [],
-    loraDraft: [], slotsDraft: [],
+    // 槽位 / LoRA 草稿不再放这里：它们只在配方页与设置页内部有意义，
+    // 住在各自 Vue 组件的 reactive 里，跟着组件一起创建与销毁。
     concepts: { items: [], kinds: [], kind: '', q: '', image_count: 0, loaded: false },
     semantics: { ready: null, reason: '', items: [], q: '', mode: '' },
     conceptThumbMap: {},

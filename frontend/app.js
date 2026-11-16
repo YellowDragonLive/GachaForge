@@ -135,22 +135,6 @@ function onInput(e) {
   }
   if (t.id === 'dFilterTagQ') filterTagQInput(t);
   if (t.id === 'conceptQ') conceptQueryInput(t);
-  // 槽位表格：只更新草稿与高级 JSON，不重绘（避免输入框失焦）
-  if (t.dataset.slot) {
-    const idx = Number(t.dataset.i), key = t.dataset.slot;
-    let v = t.value;
-    if (key === 'count' || key === 'weight') v = Number(v);
-    if (state.slotsDraft[idx]) {
-      state.slotsDraft[idx] = { ...state.slotsDraft[idx], [key]: v };
-      const ta = $('#rSlots');
-      if (ta) ta.value = JSON.stringify(state.slotsDraft, null, 2);
-    }
-  }
-  // LoRA 权重：同样不重绘，保留数字输入的光标
-  if (t.dataset.loraW !== undefined) {
-    const idx = Number(t.dataset.loraW), w = Number(t.value);
-    if (state.loraDraft[idx] && Number.isFinite(w)) state.loraDraft[idx].weight = w;
-  }
   if (t.id?.startsWith('prompt_')) {
     const d = state.draws.find((x) => x.id === Number(t.id.slice(7)));
     if (d) d.prompt = t.value;   // 切视图重绘时不丢编辑内容
@@ -160,12 +144,6 @@ function onInput(e) {
 function onChange(e) {
   const t = e.target;
   if (t.dataset && t.dataset.act === 'asm-extra') { vocabBlur(); return; }
-  if (t.id === 'pPick') {
-    // 设置页：切换正在编辑的预设
-    state.settingsPid = Number(t.value) || null;
-    renderSettings().catch(fail);
-    return;
-  }
   if (t.dataset && t.dataset.act === 'asm-pool') { asmPoolChange(t); return; }
   if (t.id === 'dFilterPool') {
     state.filterPool = t.value;
@@ -180,18 +158,6 @@ function onChange(e) {
     if (q) q.value = '';
     state.filterTagQ = '';
     loadTagOptions(state.filterPool, '');
-  }
-  if (t.dataset.slot && t.tagName === 'SELECT') {
-    const idx = Number(t.dataset.i);
-    if (state.slotsDraft[idx]) {
-      state.slotsDraft[idx] = { ...state.slotsDraft[idx], pool: t.value };
-      const ta = $('#rSlots');
-      if (ta) ta.value = JSON.stringify(state.slotsDraft, null, 2);
-    }
-  }
-  if (t.id === 'pCheckpoint') {
-    const free = $('#pCheckpointFree');
-    if (free) free.value = t.value;
   }
 }
 

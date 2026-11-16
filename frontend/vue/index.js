@@ -6,7 +6,7 @@
 // 不需要 .vue 文件，也不需要 Vite。
 export {
   createApp, defineComponent, ref, reactive, computed, watch,
-  onMounted, onBeforeUnmount, onUnmounted, nextTick, h, toRef,
+  onMounted, onBeforeUnmount, onUnmounted, nextTick, h, toRef, toRaw,
 } from '../vendor/vue.esm-browser.prod.js';
 
 export { mountVue, unmountVue, isVueMounted } from './host.js';

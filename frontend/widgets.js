@@ -174,25 +174,20 @@ export function normalizeLoras(raw) {
   return out;
 }
 
-export function loraOptionsHtml(available, chosen) {
+/**
+ * LoRA 下拉的候选列表（数据，不是 HTML）。
+ *
+ * 改这个形状是为了给 Vue 用：模板 v-for 渲染 option，纯函数只负责「哪些可选、哪个已添加」
+ * ——已添加的置灰，用户不会重复添加同一条。返回 HTML 的老写法没法 v-for，也没法单测细节。
+ */
+export function loraOptionList(available, chosen) {
   const used = new Set(normalizeLoras(chosen).map((x) => x.name));
   const list = Array.isArray(available) ? available : [];
-  return `<option value="">（选择 LoRA 文件）</option>${list.map((name) =>
-    `<option value="${esc(name)}" ${used.has(String(name)) ? 'disabled' : ''}>${esc(cut(String(name), 64))}${used.has(String(name)) ? ' · 已添加' : ''}</option>`
-  ).join('')}`;
-}
-
-export function loraRowsHtml(loras) {
-  const rows = normalizeLoras(loras);
-  if (!rows.length) return '<div class="hint">尚未添加 LoRA · 留空即只用 checkpoint</div>';
-  return rows.map((x, i) => `<div class="lora-row" data-i="${i}">
-    <span class="lora-name" title="${esc(x.name)}">${esc(cut(x.name, 46))}</span>
-    <label class="mini">权重<input type="number" data-lora-w="${i}" step="0.05" min="-4" max="4"
-      value="${x.weight}"></label>
-    <button type="button" class="btn small" data-act="lora-up" data-i="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
-    <button type="button" class="btn small" data-act="lora-down" data-i="${i}" ${i === rows.length - 1 ? 'disabled' : ''}>↓</button>
-    <button type="button" class="btn small danger" data-act="lora-del" data-i="${i}">移除</button>
-  </div>`).join('');
+  return list.map((name) => ({
+    value: String(name),
+    text: cut(String(name), 64),
+    disabled: used.has(String(name)),
+  }));
 }
 
 // ---------------- 配方槽位：可视化表格替代手写 JSON ----------------
@@ -211,37 +206,24 @@ export function normalizeSlots(raw) {
 }
 
 /** 槽位的池下拉：类别优先，其次具体池；当前值不在列表里也保留，避免编辑时丢失。 */
-export function slotPoolOptionsHtml(pools, selected) {
+/**
+ * 槽位「卡池」下拉的分组数据（数据，不是 HTML）。
+ *
+ * 三段：不限池 / 按类别（角色、服装…）/ 指定卡池。指定卡池里剔掉名字带冒号的那种
+ * 「类别:子类」伪池（不是可抽的真实池）。当前值不在任何一段里时给 custom，
+ * 否则旧配方换个机器打开会变成「不选池」，看上去像配置丢了。
+ */
+export function poolOptionGroups(pools, selected) {
   const list = Array.isArray(pools) ? pools : [];
   const kinds = [...new Set(list.map((p) => String(p.kind || '其他')))];
-  const sel = (v) => String(v) === String(selected ?? '') ? 'selected' : '';
-  const extra = selected && !kinds.includes(String(selected)) &&
-    !list.some((p) => String(p.name) === String(selected))
-    ? `<option value="${esc(selected)}" selected>${esc(selected)}（自定义）</option>` : '';
-  return `<option value="" ${sel('')}>（不选池）</option>${extra}
-    <optgroup label="按类别">${kinds.map((k) =>
-      `<option value="${esc(k)}" ${sel(k)}>${esc(k)}</option>`).join('')}</optgroup>
-    <optgroup label="指定卡池">${list.filter((p) => !/[:：]/.test(String(p.name || '')))
-      .map((p) => `<option value="${esc(p.name)}" ${sel(p.name)}>${esc(cut(p.name, 46))}</option>`)
-      .join('')}</optgroup>`;
-}
-
-export function slotRowsHtml(slots, pools, hotTags) {
-  const rows = normalizeSlots(slots);
-  if (!rows.length) return '<div class="hint">还没有槽位 · 点下方「＋ 添加槽位」，或展开高级模式粘贴 JSON</div>';
-  // datalist 由 recipeForm 统一输出一份（重复 id 在 HTML 里非法，浏览器只认第一个）
-  void hotTags;
-  return rows.map((s, i) => `<div class="slot-row" data-slot-row="${i}">
-    <span class="slot-idx">${i + 1}</span>
-    <label class="mini">卡池<select data-slot="pool" data-i="${i}">${slotPoolOptionsHtml(pools, s.pool)}</select></label>
-    <label class="mini">条数<input type="number" data-slot="count" data-i="${i}" min="1" max="20" value="${s.count}"></label>
-    <label class="mini">权重<input type="number" data-slot="weight" data-i="${i}" min="0" max="1" step="0.1" value="${s.weight}"></label>
-    <label class="mini">tag 过滤<input type="text" data-slot="filter" data-i="${i}" list="slotTagList"
-      value="${esc(s.filter)}" placeholder="留空 = 不过滤，点开可选热门 tag"></label>
-    <button type="button" class="btn small" data-act="slot-up" data-i="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
-    <button type="button" class="btn small" data-act="slot-down" data-i="${i}" ${i === rows.length - 1 ? 'disabled' : ''}>↓</button>
-    <button type="button" class="btn small danger" data-act="slot-del" data-i="${i}">移除</button>
-  </div>`).join('');
+  const cur = String(selected ?? '');
+  const named = list.filter((p) => !/[:：]/.test(String(p.name || '')));
+  const custom = cur && !kinds.includes(cur) && !list.some((p) => String(p.name) === cur) ? cur : '';
+  return {
+    custom,
+    kinds,
+    pools: named.map((p) => ({ value: String(p.name), text: cut(p.name, 46) })),
+  };
 }
 
 // ---------------- 通用概念缩略图卡片 ----------------

@@ -1,15 +1,14 @@
-import { $ } from '../core/ui.js';
-import { state } from '../store.js';
 // 生成参数域：workflow / checkpoint / LoRA / 采样参数的唯一真相。
 //
 // 抽卡台的调参抽屉与设置页的预设表单，过去各自拼一份 POST body，导致 workflow
 // 硬编码三处（其中设置页永远写死 sdxl_minimal.json）。多模型改造后把公共部分
 // 收敛到这里：表单模板、草稿构造、body 构造各只有一份。
 //
-// 依赖方向：本模块只依赖 api.js / detail.js / widgets.js，不 import app.js。
+// 依赖方向：本模块只依赖 widgets.js / detail.js，不 import 视图，也不碰 DOM。
+// 设置页换成 Vue 之后，body 从组件里的草稿对象读，不再从 document 里逐个 getElementById。
 
 import { esc } from '../detail.js';
-import { quickFilterHtml, normalizeLoras, loraOptionsHtml, loraRowsHtml } from '../widgets.js';
+import { normalizeLoras } from '../widgets.js';
 
 export const SAMPLERS = ['euler_ancestral', 'euler', 'dpmpp_2m', 'dpmpp_2m_sde',
   'dpmpp_sde', 'ddim', 'uni_pc'];
@@ -18,23 +17,33 @@ export const SCHEDULERS = ['normal', 'karras', 'exponential', 'sgm_uniform',
 
 export const DEFAULT_WORKFLOW = 'sdxl_minimal.json';
 
-/** 从 config.workflow_specs 取 workflow 选项；老后端只有 workflows 字符串列表也能用。 */
-export function workflowOptions(state, current) {
+/** workflow 候选（数据）：Vue 模板 v-for 用，tuningWorkflowHtml 也用它拼 option。 */
+export function workflowChoices(state, current) {
   const specs = Array.isArray(state?.config?.workflow_specs) ? state.config.workflow_specs : [];
   const names = specs.length
     ? specs.map((w) => ({ name: w.name, label: w.label || w.name, capabilities: w.capabilities || [] }))
     : (state?.config?.workflows || []).map((name) => ({ name, label: name, capabilities: [] }));
   const cur = String(current || DEFAULT_WORKFLOW);
-  return names.map((w) => `<option value="${esc(w.name)}" ${w.name === cur ? 'selected' : ''}>${esc(w.label)}</option>`).join('')
-    || `<option value="${esc(cur)}">${esc(cur)}</option>`;
+  return names.length ? names : [{ name: cur, label: cur, capabilities: [] }];
+}
+
+/** workflow 选项拼成 option 字符串（只剩调参抽屉这个原生视图在用）。 */
+function workflowOptions(state, current) {
+  const cur = String(current || DEFAULT_WORKFLOW);
+  return workflowChoices(state, cur).map((w) =>
+    `<option value="${esc(w.name)}" ${w.name === cur ? 'selected' : ''}>${esc(w.label)}</option>`).join('');
+}
+
+/** 当前 workflow 是否要额外填 CLIP / VAE（Anima 系列走 UNET+CLIP+VAE 三段加载）。 */
+export function hasModelExtras(state, workflow) {
+  const spec = (state?.config?.workflow_specs || []).find((w) => w.name === workflow);
+  const caps = spec?.capabilities || [];
+  return caps.includes('clip') || String(workflow).toLowerCase().includes('anima');
 }
 
 /** 按 spec 能力显示模型专有字段（Anima 的 clip / vae）。无 spec 时按文件名推断。 */
 export function modelExtraFields(state, workflow, values = {}) {
-  const spec = (state?.config?.workflow_specs || []).find((w) => w.name === workflow);
-  const caps = spec?.capabilities || [];
-  const anima = caps.includes('clip') || String(workflow).toLowerCase().includes('anima');
-  if (!anima) return '';
+  if (!hasModelExtras(state, workflow)) return '';
   return `<div class="row" style="margin-top:8px">
     <div class="field"><span>CLIP 模型（Anima/Qwen）</span>
       <input type="text" id="tClip" value="${esc(values.clip || 'qwen_3_06b_base.safetensors')}"></div>
@@ -48,19 +57,6 @@ export function tuningWorkflowHtml(state, current) {
   return `<div class="field" style="margin-top:8px"><span>生图 workflow · 决定用哪个模型</span>
     <select id="tWorkflow">${workflowOptions(state, current)}</select>
     <div class="hint">SDXL / Anima 共用本机 ComfyUI，切换后 checkpoint 与 LoRA 需匹配该模型。</div>
-  </div>`;
-}
-
-/** 设置页的 workflow 选择行（宽版，带能力说明）。 */
-export function settingsWorkflowHtml(state, current) {
-  const specs = state?.config?.workflow_specs || [];
-  const cur = String(current || DEFAULT_WORKFLOW);
-  const spec = specs.find((w) => w.name === cur);
-  return `<div class="field" style="margin-top:8px"><span>Workflow · 不同模型走不同节点图</span>
-    <select id="pWorkflow" style="min-width:220px">${workflowOptions(state, cur)}</select>
-    <div class="hint">${spec
-      ? esc(`${spec.label} · 能力：${(spec.capabilities || []).join('、') || '基础'}`)
-      : '无 spec 的旧模板按 SDXL 兼容模式运行'}</div>
   </div>`;
 }
 
@@ -87,26 +83,34 @@ export function tuningBody(state, prefix = 't') {
   return body;
 }
 
-/** 从设置页表单读 body。与调参抽屉共用同一份字段口径。 */
-export function settingsBody(state) {
-  const $ = (id) => document.getElementById(id);
-  const p = state.profiles.find((x) => x.id === state.settingsPid) || {};
+/**
+ * 从设置页的表单草稿读 body。
+ *
+ * 参数是草稿对象而不是 document：设置页是 Vue 组件，表单值住在一个 reactive 里，
+ * 从 DOM 读会和「Vue 认为的值」分裂（筛选框自动落选时 DOM 变了、草稿没变）。
+ * 显式传入 draft 也让这个函数可以在测试里直接调，不用先造 DOM。
+ */
+export function settingsBody(state, draft = {}, loras = []) {
   const body = {
-    id: state.settingsPid || undefined,
-    name: ($('pName')?.value || '').trim(),
-    checkpoint: ($('pCheckpointFree')?.value || '').trim() || $('pCheckpoint')?.value || '',
-    loras: normalizeLoras(state.loraDraft || p.loras || []),
-    steps: Number($('pSteps')?.value) || 20,
-    cfg: Number($('pCfg')?.value) || 6,
-    width: Number($('pWidth')?.value) || 1024,
-    height: Number($('pHeight')?.value) || 1360,
-    sampler: $('pSampler')?.value || 'euler_ancestral',
-    scheduler: $('pScheduler')?.value || 'normal',
-    negative: $('pNegative')?.value ?? p.negative,
-    workflow: $('pWorkflow')?.value || p.workflow || DEFAULT_WORKFLOW,
+    id: draft.id || undefined,
+    name: String(draft.name || '').trim(),
+    // 手动填写优先：枚举里没有的 checkpoint（换机器 / 自定义文件名）不许被下拉吞掉
+    checkpoint: String(draft.checkpointFree || '').trim() || String(draft.checkpoint || ''),
+    loras: normalizeLoras(loras),
+    steps: Number(draft.steps) || 20,
+    cfg: Number(draft.cfg) || 6,
+    width: Number(draft.width) || 1024,
+    height: Number(draft.height) || 1360,
+    sampler: draft.sampler || 'euler_ancestral',
+    scheduler: draft.scheduler || 'normal',
+    negative: draft.negative ?? '',
+    workflow: draft.workflow || DEFAULT_WORKFLOW,
   };
-  if ($('pClip')) body.clip = $('pClip').value.trim();
-  if ($('pVae')) body.vae = $('pVae').value.trim();
+  // clip / vae 只在当前 workflow 需要时才发：发给 SDXL 会被后端当成无关字段
+  if (hasModelExtras(state, body.workflow)) {
+    body.clip = String(draft.clip || '').trim();
+    body.vae = String(draft.vae || '').trim();
+  }
   return body;
 }
 
@@ -128,24 +132,28 @@ export function profileDraft(state) {
   };
 }
 
-/** 设置页 LoRA 区块（从 renderSettings 抽出，避免重复 loraOptionsHtml 调用）。 */
-export function loraPickerHtml(state) {
-  const loras = state.models.loras || [];
-  return `<div class="field picker" style="margin-top:12px"><span>LoRA · 点选文件 + 调权重，无需写 JSON</span>
-    <div class="row">
-      ${quickFilterHtml('pLoraPick', '筛选 LoRA：neg / style / 画风', { width: 220 })}
-      <span class="hint" data-qf-count="pLoraPick"></span>
-      <span class="hint">共 ${loras.length} 个文件</span>
-    </div>
-    <div class="row" style="margin-top:6px">
-      <select id="pLoraPick" style="flex:1;min-width:190px">${loraOptionsHtml(loras, state.loraDraft)}</select>
-      <label class="mini">权重<input type="number" id="pLoraWeight" value="0.8"
-        step="0.05" min="-4" max="4" style="width:86px"></label>
-      <button class="btn small primary" data-act="lora-add">＋ 添加</button>
-    </div>
-    <div id="loraRows" style="margin-top:8px">${loraRowsHtml(state.loraDraft)}</div>
-    <div class="hint">${loras.length
-      ? '先筛（如 neg → neg4all…safetensors），回车直接选中；顺序即加载顺序。负向 LoRA 权重填负数，例如 -1。'
-      : '当前无 LoRA 文件（mock 模式或 ComfyUI 未加载），可只用 checkpoint。'}</div>
-  </div>`;
+/** 把一条预设摊成设置页的表单草稿（切换预设时直接改草稿，不重新挂载组件）。 */
+export function profileToDraft(p, pid) {
+  const src = p || {};
+  return {
+    id: src.id ?? pid ?? null,
+    name: src.name || (src.id ? '默认参数' : '新预设'),
+    checkpoint: src.checkpoint || '',
+    checkpointFree: '',
+    steps: src.steps ?? 20, cfg: src.cfg ?? 6,
+    width: src.width ?? 1024, height: src.height ?? 1360,
+    sampler: src.sampler || 'euler_ancestral',
+    scheduler: src.scheduler || 'normal',
+    negative: src.negative ?? '',
+    workflow: src.workflow || DEFAULT_WORKFLOW,
+    clip: src.clip || '', vae: src.vae || '',
+  };
+}
+
+/** 枚举里没有当前值时把它补进列表，避免换机器后预设显示成「空」。 */
+export function optionsWithCurrent(list, current) {
+  const arr = (Array.isArray(list) ? list : []).map(String);
+  const cur = String(current ?? '');
+  if (cur && !arr.includes(cur)) arr.unshift(cur);
+  return arr;
 }

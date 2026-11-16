@@ -196,35 +196,38 @@ const cases = [
       null, { name: 'b' }, { name: 'c', weight: 99 },
     ]), [{ name: 'a', weight: 0.5 }, { name: 'b', weight: 1 }, { name: 'c', weight: 4 }]);
     assert.deepEqual(W.normalizeLoras('坏 JSON'), []);
-    const html = W.loraRowsHtml([{ name: 'a.safetensors', weight: 0.8 }]);
-    assert.match(html, /data-lora-w="0"/);
-    assert.match(html, /data-act="lora-del"/);
-    assert.match(html, /lora-up[^>]*disabled/);
-    assert.match(W.loraOptionsHtml(['a', 'b'], [{ name: 'a' }]), /value="a" disabled/);
+    // LoRA 下拉改成「返回数据」，由 Vue 模板 v-for 渲染：这里验的是候选与置灰规则
+    const opts = W.loraOptionList(['a.safetensors', 'b.safetensors'], [{ name: 'a.safetensors' }]);
+    assert.deepEqual(opts.map((o) => o.disabled), [true, false], '已添加的候选要置灰');
+    assert.match(opts[0].text, /a\.safetensors/);
   }],
-  ['槽位表：可视化行、单一 datalist 引用、数值范围', () => {
+  ['槽位表：卡池分组数据、自定义池保留、数值范围', () => {
     assert.deepEqual(W.normalizeSlots('[{"pool":"角色","count":9,"weight":5}]'),
       [{ pool: '角色', count: 9, weight: 1, filter: '' }]);
-    const html = W.slotRowsHtml([{ pool: '角色', count: 1, weight: 1, filter: 'fate' }],
-      [{ name: 'zh_TW', kind: '角色' }], [{ value: 'asuna' }]);
-    assert.match(html, /data-slot="pool"/);
-    assert.match(html, /data-slot="filter"/);
-    assert.match(html, /list="slotTagList"/);
-    assert.doesNotMatch(html, /<datalist/);   // datalist 由页面输出一份，避免重复 id
-    assert.match(html, /value="角色" selected/);
-    assert.match(W.slotPoolOptionsHtml([{ name: 'p', kind: '角色' }], '自定义池'),
-      /自定义池（自定义）/);
+    const g = W.poolOptionGroups(
+      [{ name: 'zh_TW', kind: '角色' }, { name: '组合预设:服装', kind: '角色' }, { name: 'x', kind: '服装' }],
+      '自定义池');
+    assert.deepEqual(g.kinds, ['角色', '服装'], '类别去重且保持出现顺序');
+    assert.deepEqual(g.pools.map((p) => p.value), ['zh_TW', 'x'], '带冒号的伪池不进槽位下拉');
+    assert.equal(g.custom, '自定义池', '枚举外的当前值要保留，否则旧配方像是配置丢了');
+    assert.equal(W.poolOptionGroups([{ name: 'zh_TW', kind: '角色' }], 'zh_TW').custom, '');
   }],
-  ['app.js 接线：过滤构造器 / 槽位表 / LoRA 行', () => {
+  ['接线：过滤构造器 / 槽位与 LoRA 都是数据驱动', () => {
     const app = frontendSrc();
     for (const needle of [
       "from './widgets.js'", 'id="dFilterPool"', 'id="dFilterTag"', 'hotTagChipsHtml(',
-      'function setFilterSpec(', 'async function loadTagOptions(', 'function refreshSlots()',
-      'function refreshLoraRows()', 'slotRowsHtml(', 'loraRowsHtml(', 'normalizeLoras(',
-      'state.loraDraft', 'state.slotsDraft', 'await loadTagOptions()',
+      'function setFilterSpec(', 'async function loadTagOptions(', 'normalizeLoras(',
+      'await loadTagOptions()',
     ]) {
       assert.ok(app.includes(needle), `app.js 缺少接线：${needle}`);
     }
+    // 槽位 / LoRA 行已改为 Vue v-for + v-model：判据从「有拼 HTML 的函数」变成
+    // 「模板里有循环，且不再靠 data-slot / data-lora-w 回写 state」
+    assert.match(app, /v-for="\(s, i\) in slots"/, '槽位行要由 v-for 渲染');
+    assert.match(app, /v-model\.number="s\.count"/, '槽位条数要双向绑定，别再用 data-slot 回写');
+    assert.match(app, /v-for="\(x, i\) in loras"/, 'LoRA 行要由 v-for 渲染');
+    assert.match(app, /v-model\.number="x\.weight"/, 'LoRA 权重要双向绑定');
+    assert.doesNotMatch(app, /data-slot=|data-lora-w=/, 'DOM → state 的槽位/LoRA 回写通道应已删除');
     assert.doesNotMatch(app, /JSON\.parse\(\$\('#pLoras'\)/, 'LoRA 不再要求用户手写 JSON');
     assert.doesNotMatch(app, /槽位 JSON（pool/, '槽位 JSON 不再作为主输入');
   }],
@@ -784,7 +787,11 @@ const cases = [
     // LoRA 选择器的筛选框随 profile 编辑收敛到 features/generation.js
     const gen = readFileSync(new URL('../frontend/features/generation.js', import.meta.url), 'utf8');
     for (const id of ['pLoraPick', 'pCheckpoint', 'tCheckpoint', 'dFilterPool', 'rTplPool']) {
-      assert.match(app + gen, new RegExp(`quickFilterHtml\\('${id}'`), `${id} 旁边要有筛选框`);
+      // 抽卡台/过滤面板仍用 quickFilterHtml 生成；设置页与配方页是 Vue 模板，直接写 data-qf。
+      // 判据统一成「有筛选框挂在这个 id 上」，不限定产出方式。
+      const wired = (app + gen).includes(`quickFilterHtml('${id}'`)
+        || new RegExp(`data-qf="${id}"`).test(app);
+      assert.ok(wired, `${id} 旁边要有筛选框`);
     }
     assert.match(app, /data-asm-pool-q/, '抽卡装配的池 chip 行要能筛');
     assert.match(app, /冷存/, '冷存池要在下拉兜底里可见（否则「明明导入过怎么没有」）');
