@@ -512,6 +512,15 @@ const modeOf = (cfg) => {
   return SLOT_MODES.includes(c.mode) ? c.mode : 'random';
 };
 
+/**
+ * 每个图元都补上 vector-effect 属性。Chrome 只认 SVG 属性上的这个值，
+ * CSS 里的同名属性会被解析、能读到 computed style，但**画的时候不生效**：
+ * 实测场景画框放大 2.2 倍后，1.1px 描边被画成 2.4px、虚线节距也一起变长。
+ * 补在 markup 上之后，同一个 SVG 塞进多宽的容器线宽都稳定。
+ */
+const crisped = (svg) => svg.replace(/<(path|circle|rect)(?=[\s>])/g,
+  '<$1 vector-effect="non-scaling-stroke"');
+
 /** 身体部位 → 槽位 key。顺序即渲染顺序（头 → 身体 → 四肢），重叠时后者盖前者。 */
 export const DOLL_PARTS = [
   { key: 'face', label: '表情', part: '脸' },
@@ -549,7 +558,7 @@ export function dollFigureHtml(slots, opts = {}) {
     + '<path d="M34 40 L24 68 M58 40 L68 68"/>'
     + '<circle cx="24" cy="71" r="2.8"/><circle cx="68" cy="71" r="2.8"/>'
     + `<path d="${legs}"/>`;
-  return `<svg class="doll-svg${ghost ? ' is-ghost' : ''}" viewBox="0 0 92 118" aria-hidden="true">
+  return crisped(`<svg class="doll-svg${ghost ? ' is-ghost' : ''}" viewBox="0 0 92 118" aria-hidden="true">
     <path class="doll-deco" d="M25 114 H67"/>
     <path class="doll-deco" d="M46 33 V38"/>
     <g class="doll-body">${body}</g>
@@ -561,7 +570,7 @@ export function dollFigureHtml(slots, opts = {}) {
       + '<path d="M34 40 L24 68 M58 40 L68 68"/>'
       + '<circle cx="24" cy="71" r="2.8"/><circle cx="68" cy="71" r="2.8"/>')}
     ${zone('action', `<path class="hit" d="${legs}"/><path d="${legs}"/>`)}
-  </svg>`;
+  </svg>`);
 }
 
 /**
@@ -574,7 +583,7 @@ export function sceneStageHtml(scene) {
     `<g class="doll-zone${extra ? ' ' + extra : ''} m-${modeOf(s[key])}"`
     + ` data-act="asm-open" data-scope="scene" data-key="${key}">`
     + `<title>${esc(label)}</title>${body}</g>`;
-  return `<svg class="doll-svg stage-svg" viewBox="0 0 160 96" aria-hidden="true">
+  return crisped(`<svg class="doll-svg stage-svg" viewBox="0 0 160 96" aria-hidden="true">
     ${zone('background', '背景 · 点画面也能换', '<rect class="area" x="3" y="3" width="154" height="90" rx="6"/>')}
     <rect class="doll-base" x="3" y="3" width="154" height="90" rx="6"/>
     <g class="doll-deco">
@@ -591,7 +600,7 @@ export function sceneStageHtml(scene) {
       + '<circle cx="148" cy="80" r="5"/>')}
     ${zone('composition', '构图 · 点画框也能换',
       '<rect class="frame-rect" x="3" y="3" width="154" height="90" rx="6"/>', 'frame')}
-  </svg>`;
+  </svg>`);
 }
 
 // ---------------- 状态栏立绘：从锁定的条目反查概念封面 ----------------

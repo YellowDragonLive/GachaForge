@@ -388,8 +388,8 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
 .doll-svg { display: block; width: 100%; height: 100%; }
 /* 小人占满整个方框，立绘按钮垫在它下面：点图形 = 换那一格，点空白/照片 = 看历史图 */
 .doll-person .doll-svg { position: absolute; inset: 0; z-index: 1; }
-/* 线宽不随缩放变粗：小人被拉大时描边还是 1.6px，不然会糊成一团 */
-.doll-svg * { vector-effect: non-scaling-stroke; }
+/* 线宽由 markup 上的 vector-effect 属性固定（见 widgets.js crisped()）：
+   CSS 里的 vector-effect 会被解析但不生效，实测画框放 2.2 倍时 1.1px 描边画成 2.4px。 */
 .doll-art { position: absolute; inset: 0; z-index: 0; border: 0; padding: 0;
   background: transparent; cursor: pointer; overflow: hidden; }
 .doll-art img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 20%;
@@ -408,6 +408,8 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
 /* 底稿 = 默认的虚线人形。三个默认关闭的槽位不再另外画线，靠它保持身体完整 */
 .doll-body, .doll-base { fill: none; stroke: #bcc6d8; stroke-width: 1.5;
   stroke-dasharray: 3 3; stroke-linejoin: round; pointer-events: none; }
+/* 画框是「引导线」不是控件：比小人再轻一档，免得抢了画面里的内容 */
+.doll-base { stroke-width: 1.1; stroke-dasharray: 4 4; stroke: #c8d1e0; }
 .doll-zone { fill: none; stroke: #8d99b3; stroke-width: 1.7; stroke-dasharray: 3 3;
   stroke-linejoin: round; pointer-events: all; transition: stroke .15s, fill .15s; }
 .doll-zone .area { fill: transparent; }
