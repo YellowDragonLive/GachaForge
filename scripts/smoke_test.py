@@ -457,6 +457,34 @@ def main() -> int:
               empty == [] and len(dirty) == 1 and dirty[0]["job"] is None,
               f"empty={empty} dirty={len(dirty)} 条")
 
+        print("-- 同一抽卡用不同 workflow 重跑（多模型核心） --")
+        anima = c.post("/api/gen-profiles", json={
+            "name": "smoke-anima", "checkpoint": "waiANIMAInt8_v10Int8Experimental.safetensors",
+            "workflow": "anima.json", "clip": "qwen_3_06b_base.safetensors",
+            "vae": "qwen_image_vae.safetensors", "steps": 10, "cfg": 4.5}).json()["data"]
+        j3 = c.post("/api/jobs", json={"draw_ids": [did],
+                                       "gen_profile_id": anima["id"], "force": True}).json()["data"]
+        check("不同预设 force 重跑会新建任务", bool(j3["created"]),
+              f"created={j3['created']}")
+        if j3["created"]:
+            jid3 = j3["created"][0]
+            import sqlite3 as _sq
+            _c = _sq.connect(str(SMOKE_DB))
+            snap = _c.execute("select workflow, profile_json from job_snapshots where job_id=?",
+                              (jid3,)).fetchone()
+            first = _c.execute("select workflow from job_snapshots where job_id=?",
+                               (job_id,)).fetchone()
+            _c.close()
+            check("每个 Job 记录自己的 workflow（修复假覆盖）",
+                  snap and snap[0] == "anima.json" and first and first[0] == "sdxl_minimal.json",
+                  f"job1={first[0] if first else None} job3={snap[0] if snap else None}")
+            import json as _js
+            check("Anima 专有参数进了该 Job 快照",
+                  snap and _js.loads(snap[1]).get("clip") == "qwen_3_06b_base.safetensors",
+                  str(snap[1][:120] if snap else None))
+            check("workflow 不同 → 幂等键不同，两个任务共存",
+                  jid3 != job_id)
+
         retried = c.post(f"/api/jobs/{job_id}/retry", json={})
         check("重试点可用", retried.status_code == 200)
         cancelled = c.post(f"/api/jobs/{job_id}/cancel", json={})
