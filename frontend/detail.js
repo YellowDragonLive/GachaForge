@@ -31,7 +31,10 @@ export function slotChips(detail, limit = 20) {
     // 锁定的格子要能一眼认出：装配面板里锁了什么，这里就标什么，方便和图逐项对照。
     const lock = x.locked
       ? `<i class="chip-lock" title="本次锁定：${esc(x.locked)}">锁</i>` : '';
-    return `<span class="chip${x.locked ? ' locked' : ''}" title="${esc(cut(text, 300))}">` +
+    // 条目原文里手写的 `:1.2` 在出图前就被剥掉了，chip 上只显示干净的那份。
+    // 保留一句 hover 说明，用户对照卡池原文时才不会以为「抽错了/少字了」。
+    const note = x.stripped_weight ? '｜原文带手写权重（:1.2 之类的超重标记），出图前已剥' : '';
+    return `<span class="chip${x.locked ? ' locked' : ''}" title="${esc(cut(text, 300))}${note}">` +
       `${lock}${esc(name)}: ${esc(cut(label + text, 72))}</span>`;
   }).filter(Boolean);
   // 全池随机一次可抽到数百个池，全部铺开会拖垮页面；完整结果已在 prompt 文本框里。

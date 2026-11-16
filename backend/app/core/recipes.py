@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from .pools import PoolData, apply_filter_spec
+from .weights import strip_weights
 
 TOKEN_RE = re.compile(r"__([\w./\-*]+?)(?:#(\d+))?(~)?__")
 
@@ -125,6 +126,26 @@ def dedupe_parts(parts: list[str]) -> list[str]:
     return out
 
 
+def strip_detail_weights(detail: list[dict]) -> list[dict]:
+    """把明细里的 tags 剥掉超重权重（原地改，返回同一个 list）。
+
+    两条抽卡路径（配方 `run_recipe` 与手工卡片 `build_prompt`）都要用：
+    prompt 剥了、明细没剥的话，装配区会显示 `(x:1.2)` 而实际出图是 `x`，
+    对照就永远对不上；概念索引的 key 也会带一截 `:1.2` 变成孤儿。
+    `raw_tags` 留原文，是为了让人看出「这条少了 :1.2 是清理，不是抽错了」。
+    """
+    for item in detail:
+        tags = item.get("tags") if isinstance(item, dict) else None
+        if not tags:
+            continue
+        new_tags = [t for t in (strip_weights(x) for x in tags) if t]
+        if new_tags != tags:
+            item["raw_tags"] = tags
+            item["stripped_weight"] = True
+            item["tags"] = new_tags
+    return detail
+
+
 def run_recipe(recipe: dict[str, Any], all_pools: list[PoolData], rng) -> dict:
     """执行一次配方 → {prompt, detail}。detail 记录每个槽位抽到了什么。"""
     parts: list[str] = []
@@ -189,7 +210,20 @@ def run_recipe(recipe: dict[str, Any], all_pools: list[PoolData], rng) -> dict:
     if tail:
         parts.append(tail)
         detail.append({"slot": "fixed_tail", "tags": [tail]})
-    prompt = ", ".join(dedupe_parts([p for p in parts if p]))
+    # 条目原文里手写的 `(long petticoat:1.2)` / `a:1.3` 是 SD1.5 时代的残留：一条条目只该是
+    # 「一个概念」，强调程度由人在配方里决定，而不是每条自带 1.2/1.5 把 prompt 拉偏。
+    # 只在「写进 prompt 的那一刻」剥掉超重权重，**池子里的原文一个字都不改** ——
+    # 卡池页 / 选择器 / 重新导入看到的仍是导入时的样子，清理结果不会被写回数据。
+    cleaned: list[str] = []
+    for part in parts:
+        if not part:
+            continue
+        fixed = strip_weights(part)
+        if fixed:
+            cleaned.append(fixed)
+    parts = cleaned
+    strip_detail_weights(detail)
+    prompt = ", ".join(dedupe_parts(parts))
     prompt = re.sub(r"(,\s*){2,}", ", ", prompt).strip(" ,")
     return {"prompt": prompt, "detail": detail}
 

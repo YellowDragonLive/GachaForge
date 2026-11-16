@@ -390,6 +390,9 @@ def create_session(db: Session, params: dict) -> dict:
                           else ([str(it["label"])] if it.get("label") else []))}
                 for it in card
             ]
+            # build_prompt 已经把 prompt 里的超重权重剥了，明细必须同步剥
+            # （否则装配区显示的 tags 与真正送进 ComfyUI 的不一致）
+            recipe_core.strip_detail_weights(detail)
         cards.append({"idx": i + 1,
                       "seed": (int(seed) + i) if seed is not None else None,
                       "prompt": prompt, "negative": negative, "detail": detail})

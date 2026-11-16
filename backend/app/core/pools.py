@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from .weights import strip_weights
+
 NAME_KEYS = ("name", "名称", "label", "title", "character", "角色", "cn", "en", "tag")
 TAGS_KEYS = ("tags", "tag", "styleColumns", "标签", "风格")
 ARTIST_HINT = ("artist", "画师")
@@ -248,6 +250,8 @@ def prompt_tag(it: dict) -> str:
 
 
 def build_prompt(card: list[dict], sep: str = ", ", prepend: str = "") -> str:
-    parts = [p for p in (prompt_tag(it) for it in card) if p]
-    body = sep.join(parts)
+    # 手工装配（锁定条目直接拼）走的是这条出口，同样剥掉条目自带的超重权重；
+    # 池子数据不动，只在写进 prompt 时净一次。
+    parts = [strip_weights(p) for p in (prompt_tag(it) for it in card) if p]
+    body = sep.join(p for p in parts if p)
     return (prepend + body).strip() if prepend else body
