@@ -37,6 +37,16 @@ def tag_suggest(q: str = "", pool: str = "", limit: int = Query(30, ge=1, le=100
     return ok(svc.suggest_tags(db, q=q, pool=pool, limit=limit))
 
 
+@router.get("/items")
+def list_items(kind: str = "", q: str = "", pool: str = "",
+               limit: int = Query(60, ge=1, le=200),
+               offset: int = Query(0, ge=0),
+               db: Session = Depends(get_db)):
+    """装配面板的选择器数据源：按类别列出条目本身，供锁定到具体 tag。"""
+    return ok(svc.list_items(db, kind=kind, q=q, pool=pool,
+                             limit=limit, offset=offset))
+
+
 @router.delete("/batches/{batch_id}")
 def rollback(batch_id: int, db: Session = Depends(get_db)):
     return ok(svc.rollback_batch(db, batch_id))

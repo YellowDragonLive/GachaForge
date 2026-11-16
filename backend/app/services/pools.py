@@ -187,6 +187,38 @@ def suggest_tags(db: Session, *, q: str = "", pool: str = "", limit: int = 30) -
             "query": q or ""}
 
 
+def list_items(db: Session, *, kind: str = "", q: str = "", pool: str = "",
+               limit: int = 60, offset: int = 0) -> dict:
+    """装配面板的选择器：按类别 / 池名列出条目本身（不是 tag）。
+
+    和 suggest_tags 的区别：那个给的是「过滤表达式的关键字」，会刻意跳过带逗号的
+    长 label（塞进 `池:tag` 表达式会被逗号切碎）；装配面板的 pick 直接按 label
+    锁定整条，所以这里要原样返回 label + tags，长的也要。
+    """
+    base = select(PoolItem, Pool).join(Pool, Pool.id == PoolItem.pool_id)
+    kk = (kind or "").strip()
+    if kk:
+        base = base.where(Pool.kind == kk)
+    pk = (pool or "").strip().lower()
+    if pk:
+        base = base.where(func.lower(Pool.name).contains(pk)
+                          | func.lower(Pool.slug).contains(pk))
+    ql = (q or "").strip().lower()
+    if ql:
+        base = base.where(func.lower(PoolItem.label).contains(ql)
+                          | func.lower(PoolItem.tags).contains(ql))
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = db.execute(base.order_by(PoolItem.id)
+                      .limit(min(200, max(1, limit))).offset(max(0, offset))).all()
+    return {
+        "items": [{"label": it.label, "tags": it.tags,
+                   "pool": p.name, "kind": p.kind} for it, p in rows],
+        "total": int(total),
+        "kind": kk or "全部",
+        "query": q or "",
+    }
+
+
 def add_item(db: Session, pool_id: int, data: dict) -> PoolItem:
     get_pool(db, pool_id)
     it = PoolItem(pool_id=pool_id, label=data["label"], tags=data.get("tags", ""),
