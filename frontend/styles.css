@@ -399,10 +399,12 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
   border-color: var(--primary); }
 .stage-grid:has(.part[data-key="background"]:hover) .doll-zone[data-key="background"],
 .stage-grid:has(.part[data-key="style"]:hover) .doll-zone[data-key="style"],
+.stage-grid:has(.part[data-key="artist"]:hover) .doll-zone[data-key="artist"],
 .stage-grid:has(.part[data-key="composition"]:hover) .doll-zone[data-key="composition"] {
   stroke: var(--primary); stroke-width: 3; }
 .stage-grid:has(.doll-zone[data-key="background"]:hover) .part[data-key="background"],
 .stage-grid:has(.doll-zone[data-key="style"]:hover) .part[data-key="style"],
+.stage-grid:has(.doll-zone[data-key="artist"]:hover) .part[data-key="artist"],
 .stage-grid:has(.doll-zone[data-key="composition"]:hover) .part[data-key="composition"] {
   border-color: var(--primary); }
 
@@ -454,12 +456,13 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
 
 /* 场景页签：同一套「点哪儿改哪儿」，画框里点画面 = 背景，点色点 = 画风，点框 = 构图 */
 .stage-grid { display: grid; gap: 6px; grid-template-columns: 1fr 1fr;
-  grid-template-areas: "bg style" "stage stage" "comp comp"; }
+  grid-template-areas: "bg style" "stage stage" "artist comp"; }
 .stage-grid > .doll { grid-area: stage; min-height: 0; }
 .stage-grid > .doll .doll-svg { height: auto; }
 .stage-grid > .part[data-key="background"] { grid-area: bg; }
 .stage-grid > .part[data-key="style"] { grid-area: style; }
 .stage-grid > .part[data-key="composition"] { grid-area: comp; }
+.stage-grid > .part[data-key="artist"] { grid-area: artist; }
 
 .asm-empty { display: flex; flex-direction: column; align-items: center; gap: 6px;
   padding: 8px 0 10px; }

@@ -580,15 +580,15 @@ const cases = [
     assert.notEqual(W.dollFigureHtml(p.slots, { uid: 1, gender: 'male' }),
       W.dollFigureHtml(p.slots, { uid: 1, gender: 'female' }));
   }],
-  ['场景线稿：点画面/色点/画框分别对应背景画风构图', () => {
+  ['场景线稿：点画面/色点/签名/画框分别对应背景画风画师构图', () => {
     const scene = W.makeScene();
     scene.background = { kind: '背景', mode: 'locked', pick: 'flower field', tags: '' };
     scene.composition = { kind: '构图', mode: 'off', pick: '', tags: '' };
     const html = W.sceneStageHtml(scene);
-    for (const key of ['background', 'style', 'composition']) {
+    for (const key of ['background', 'style', 'artist', 'composition']) {
       assert.ok(html.includes(`data-key="${key}"`), `场景缺少区域：${key}`);
     }
-    assert.equal((html.match(/data-scope="scene"/g) || []).length, 3);
+    assert.equal((html.match(/data-scope="scene"/g) || []).length, 4);
     assert.match(html, /class="doll-zone m-locked"[^>]*data-key="background"/);
     assert.match(html, /class="doll-zone frame m-off"/, '画框就是构图那一格');
     assert.match(html, /class="doll-zone m-random"[^>]*data-key="style"/);
@@ -719,6 +719,37 @@ const cases = [
     assert.match(clean, /这不写库|不需要写库/, '默认路径要说明「不用写库，出图时自动净化」');
     const detailJs = readFileSync(new URL('../frontend/detail.js', import.meta.url), 'utf8');
     assert.match(detailJs, /stripped_weight/, '装配明细要说明这条的权重被剥了（否则像抽错）');
+  }],
+  ['画师槽位：场景第四格默认关，池能按别名搜到', () => {
+    const keys = W.SCENE_SLOTS.map((s) => s.key);
+    assert.ok(keys.includes('artist'), '场景要有画师格');
+    assert.equal(W.SCENE_SLOTS.find((s) => s.key === 'artist').kind, '画师');
+    const scene = W.makeScene();
+    assert.equal(scene.artist.mode, 'off', '画师默认关：专有名词摇错一位画风就全变');
+    const asm = { scene: { ...scene, artist: { ...scene.artist, mode: 'locked', pick: 'dore (gilles dore)' } }, people: [] };
+    const def = W.assemblyToDefinition(asm);
+    assert.ok(def.slots.some((s) => s.pool === '画师'), '锁定的画师要进配方槽位');
+    // 别名：口语「艺术家」和池名「画师图鉴」对不上，搜索必须能穿过这层
+    const pools = [
+      { name: '画师图鉴', kind: '画师', item_count: 1005, enabled: true },
+      { name: 'SDXL/artists', kind: '画师', item_count: 3887, enabled: true },
+    ];
+    assert.equal(W.poolSearchText(pools[0]).includes('艺术家'), true);
+    assert.equal(W.matchQuery(W.poolSearchText(pools[0]), '艺术家'), true);
+    assert.equal(W.matchQuery(W.poolSearchText(pools[1]), '艺术家'), true);
+    assert.equal(W.matchQuery(W.poolSearchText(pools[1]), 'artists'), true);
+    // 排序：带中文风格标签的「画师图鉴」要排在裸名字池前面
+    const ranked = W.rankPools(pools, '画师', 'artist');
+    assert.equal(ranked[0].name, '画师图鉴', `第一个应是画师图鉴，实际 ${ranked[0].name}`);
+  }],
+  ['画师接线：场景面板与卡池搜索都真接上了', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    assert.match(app, /part\('artist', '画师'/, '场景面板要画出画师格');
+    assert.match(app, /data-qtext="\$\{esc\(poolSearchText\(p\)\)\}/, '卡池页搜索要带别名');
+    assert.match(app, /matchQuery\(poolSearchText\(p\), q\)/, '池下拉要按别名筛');
+    const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
+    assert.match(css, /grid-template-areas: "bg style" "stage stage" "artist comp"/,
+      '画师格与构图并排，不挤掉画布');
   }],
 ];
 

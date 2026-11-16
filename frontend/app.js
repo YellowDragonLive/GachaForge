@@ -12,7 +12,7 @@ import {
   assemblyToDefinition, assemblyIsEmpty,
   splitTags, stripCountTags, portraitKeys, personTitle,
   dollFigureHtml, sceneStageHtml, DOLL_PARTS,
-  rankPools, poolChipsHtml,
+  rankPools, poolChipsHtml, poolSearchText,
   queryWords, matchQuery, quickFilterHtml,
 } from './widgets.js';
 
@@ -219,15 +219,17 @@ function asmSceneHtml() {
   const part = (key, label, side) => asmPartHtml(scene[key], {
     label, key, scope: 'scene', open: open(key), side,
   });
-  // 场景也是一张图：虚线画框里点画面 = 背景、点色点 = 画风、点画框 = 构图。
+  // 场景也是一张图：虚线画框里点画面 = 背景、点色点 = 画风、点左下角签名 = 画师、
+  // 点画框 = 构图。
   return `<div class="stage-grid">
     ${part('background', '背景', 'l')}
     ${part('style', '画风', 'r')}
     <div class="doll doll-stage">${sceneStageHtml(scene)}</div>
-    ${part('composition', '构图', 'wide')}
+    ${part('artist', '画师', 'l')}
+    ${part('composition', '构图', 'r')}
   </div>
   ${a.picking && a.picking.scope === 'scene' ? asmPickerHtml(a.picking.key) : ''}
-  <p class="hint" style="margin:8px 0 0">画风对所有人物统一生效。场景全关 = 白底纯人物。</p>`;
+  <p class="hint" style="margin:8px 0 0">画风 / 画师对所有人物统一生效。场景全关 = 白底纯人物。</p>`;
 }
 
 function asmPeopleHtml() {
@@ -407,8 +409,9 @@ function asmPoolOptionsHtml(ranked, current, q = '') {
     && !ranked.some((r) => r.name === p.name));
   const list = [...ranked, ...extra];
   const words = queryWords(q);
+  // 别名一起搜：打「艺术家」要能选到「画师图鉴」。
   const hit = words.length
-    ? list.filter((p) => matchQuery(`${p.name} ${p.kind}`, q))
+    ? list.filter((p) => matchQuery(poolSearchText(p), q))
     : list;
   const total = hit.reduce((s, p) => s + Number(p.item_count || 0), 0);
   const opts = [`<option value="">${words.length ? '筛选后' : '全部'} ${total} 条</option>`];
@@ -434,7 +437,7 @@ function refreshAsmPools() {
   if (sel) sel.innerHTML = asmPoolOptionsHtml(ranked, a.pickerPool, a.pickerPoolQ);
   const words = queryWords(a.pickerPoolQ);
   setQfCount('asmPoolList',
-    words.length ? ranked.filter((p) => matchQuery(`${p.name} ${p.kind}`, a.pickerPoolQ)).length : ranked.length,
+    words.length ? ranked.filter((p) => matchQuery(poolSearchText(p), a.pickerPoolQ)).length : ranked.length,
     a.pickerPoolQ);
 }
 
@@ -1278,7 +1281,8 @@ async function submitJobs(ids, opts = {}) {
 // ---------------- 卡池管理 ----------------
 async function renderPools() {
   const items = state.openPool ? await api.get(`/api/pools/${state.openPool}/items?q=`) : null;
-  const rows = state.pools.map((p) => `<tr>
+  // data-qtext 里放「池名 + 类别 + 别名」：搜「艺术家」也要能搜到「画师图鉴」。
+  const rows = state.pools.map((p) => `<tr data-qtext="${esc(poolSearchText(p))} ${esc(p.source || '')}">
     <td>${p.enabled ? '' : '<span class="chip">冷存</span>'}${esc(p.name)}</td>
     <td><span class="chip hl">${esc(p.kind)}</span></td><td>${p.item_count}</td>
     <td>${esc(p.source)}</td>
@@ -1312,9 +1316,11 @@ async function renderPools() {
       <tbody>${batches}</tbody></table></div>
   </div>`;
   $('#poolSearch').addEventListener('input', (e) => {
-    const q = e.target.value.toLowerCase();
-    document.querySelectorAll('#poolTable tbody tr').forEach((tr) =>
-      tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none');
+    const q = e.target.value;
+    document.querySelectorAll('#poolTable tbody tr').forEach((tr) => {
+      const text = tr.dataset.qtext || tr.textContent || '';
+      tr.style.display = matchQuery(text, q) ? '' : 'none';
+    });
   });
 }
 

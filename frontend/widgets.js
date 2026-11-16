@@ -450,10 +450,13 @@ export const PERSON_SLOTS = [
   { key: 'action', label: '动作', kind: '动作', fallback: 'off' },
 ];
 
-/** 场景的三格：全局生效，不属于任何一个角色。 */
+/** 场景的四格：全局生效，不属于任何一个角色。 */
 export const SCENE_SLOTS = [
   { key: 'background', label: '背景', kind: '背景', fallback: 'random' },
   { key: 'style', label: '画风', kind: '风格', fallback: 'random' },
+  // 画师默认关：`dore \(gilles dore\)` 这类专有名词权重极高，摇错一位画风就全变，
+  // 必须用户主动点开、亲手选，才有「今天用谁的手笔」的意味。
+  { key: 'artist', label: '画师', kind: '画师', fallback: 'off' },
   { key: 'composition', label: '构图', kind: '构图', fallback: 'off' },
 ];
 
@@ -631,6 +634,10 @@ export function sceneStageHtml(scene) {
       + '<circle cx="148" cy="80" r="5"/>')}
     ${zone('composition', '构图 · 点画框也能换',
       '<rect class="frame-rect" x="3" y="3" width="154" height="90" rx="6"/>', 'frame')}
+    ${zone('artist', '画师 · 点左下角签名也能换',
+      '<path class="hit" d="M10 84 H56"/>'
+      + '<path d="M13 85q5 -9 9 -1q4 7 8 -3q3 -6 7 1q3 5 7 -2"/>'
+      + '<path d="M48 78v10"/>')}
   </svg>`);
 }
 
@@ -729,6 +736,13 @@ const POOL_HINTS = {
     strong: [/构图|镜头|视角|composition|framing|angle/i],
     weak: [],
   },
+  // 画师：中文池名（画师图鉴）与英文池名（SDXL/artists）各命中一半。
+  // 故意把 /画师|艺术家/ 放 strong、/artist/ 放 weak：前者是 noobai 那份带中文风格
+  // 标签的 1025 位画师（抽到的 tag 更干净），后者是 3887 条的裸名字池，排在第二。
+  artist: {
+    strong: [/画师|艺术家|画家|illustrator/i],
+    weak: [/artist/i],
+  },
 };
 
 /** 与「人穿在身上 / 拍出来」无关的池：命中关键词也降一档，别让 sex_/audio_/food_ 抢前排。 */
@@ -739,6 +753,26 @@ const POOL_CURATED = /^(?:人物-|组合预设\/|动作$|构图-|镜头-|自然�
 
 /** 池名里的 `_` `/` 是分词符，正则前先摊成空格，否则 `\b` 在 `food_sweets` 上不成立。 */
 const poolText = (p) => String((p && p.name) || '').replace(/[_/]+/g, ' ').trim();
+
+/**
+ * 类别别名：用户嘴里的名字和池的正式名常常对不上——「艺术家」要能搜到「画师图鉴」。
+ * 只用于**搜索匹配**，绝不能进 poolScore：同一部位下的候选池 kind 都相同，把 kind
+ * 也算进匹配文本等于给所有池加同样的分，部位匹配度会被抹平成「谁条目多谁第一」。
+ */
+const KIND_ALIAS = {
+  画师: '画家 艺术家 artist artists 作者 illustrator 笔触',
+  风格: '画风 style',
+  服装: '衣服 穿搭 outfit clothes',
+  物品: '道具 装备 item equipment',
+  构图: '视角 镜头 composition',
+};
+
+/** 搜索用文本：池名 + 类别 + 别名。筛选框打「艺术家」才有反应。 */
+export function poolSearchText(pool) {
+  const p = pool || {};
+  return `${p.name || ''} ${p.kind || ''} ${KIND_ALIAS[p.kind] || ''}`
+    .replace(/[_/]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
 export function poolScore(pool, key) {
   const name = String((pool && pool.name) || '');
@@ -909,7 +943,8 @@ export function poolChipsHtml(pools, kind, key, selected, limit = 8, q = '') {
   // 有筛选词时不按「前 8 个匹配池」截断：搜「服装」命中的池很可能排在第 12 位，
   // 截断等于搜了没反应。改成把命中的池全摆出来（上限 30），顺序仍按部位匹配度。
   const words = queryWords(q);
-  const poolHit = (p) => matchQuery(p.name, q) || matchQuery(p.kind, q);
+  // 用别名文本筛：打「艺术家」要能筛出「画师图鉴」，打「artists」要能筛出 SDXL/artists。
+  const poolHit = (p) => matchQuery(poolSearchText(p), q);
   const hits = words.length
     ? ranked.filter(poolHit).slice(0, 30)
     : ranked.slice(0, Math.max(1, limit));
