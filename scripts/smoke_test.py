@@ -51,8 +51,13 @@ if _src.is_file():
     try:
         # v2 关系表也要清：正式库可能带着抽卡明细 / 参数快照 / 概念索引，
         # 只删四张主表会在 sqlite 默认 foreign_keys=OFF 时留下孤儿行。
+        # slot_extras / job_snapshots / profile_params 这三张「只加表」的附属表必须一起清：
+        # 它们用 slot_id / job_id 指向被删的主表，但 sqlite 默认不级联也不报错，
+        # 留下的孤儿行会让新插入的 draw_slots 复用 id=1 时撞 UNIQUE(slot_kind, slot_id)——
+        # 症状是 POST /api/draw-sessions 直接 500，而正式库跑得好好的。
         for _table in ("concept_images", "concepts", "image_assets", "images",
-                       "generation_jobs", "draw_slot_tags", "draw_slots",
+                       "generation_jobs", "job_snapshots", "profile_params",
+                       "draw_slot_tags", "draw_slots", "slot_extras",
                        "session_recipe_slots", "session_recipes", "session_loras",
                        "draw_profiles", "draws", "draw_sessions", "event_logs"):
             _c.execute(f"DELETE FROM {_table}")
