@@ -61,12 +61,17 @@ class Slot(BaseModel):
     count: int = Field(default=1, ge=1, le=20)
     weight: float = Field(default=1.0, ge=0.0, le=1.0)
     filter: str = ""
+    # 锁定到具体条目（按 label 匹配）：填了就取这一条、不随机，也不吃 filter。
+    pick: str = ""
 
 
 class RecipeDefinition(BaseModel):
     fixed_head: str = ""
     fixed_tail: str = ""
     template: str = ""
+    # 人数 tag（"1girl, 1boy, multiple girls"）：由装配面板按人物卡张数算好注入，
+    # 空表示沿用旧行为（人数仍由角色条目自带）。
+    count_tags: str = ""
     slots: list[Slot] = []
 
 
