@@ -164,6 +164,68 @@ def main() -> int:
         check("内置配方存在", len(recipes) >= 3, f"{len(recipes)} 个")
         check("默认参数预设存在", len(profiles) >= 1)
 
+        print("-- 快速筛选（前端一个 input → 后端搜索） --")
+        from backend.app.services.pools import _q_words
+        check("搜索词：空格分词 + 下划线归一",
+              _q_words(" Black_Hair  h ") == ["black", "hair", "h"],
+              str(_q_words(" Black_Hair  h ")))
+        probe = c.get("/api/pools/items", params={"kind": "角色", "limit": 3})
+        first = (probe.json()["data"]["items"] or [{}])[0]
+        tag = (first.get("tags") or "").split(",")[0].strip()
+        if tag:
+            # `black h` 这种半截词要能命中 `black hair`：库里取样，不写死数据
+            half = tag[:max(2, len(tag) // 2)]
+            r = c.get("/api/pools/items",
+                      params={"kind": "角色", "q": half, "limit": 60}).json()["data"]
+            check("半截词能搜到条目", r["total"] > 0, f"{half!r} → {r['total']} 条")
+            r2 = c.get("/api/pools/items",
+                       params={"kind": "角色", "q": f"{half} zzzznotexist"}).json()["data"]
+            check("多词是 AND（加一个不存在的词必须归零）", r2["total"] == 0,
+                  f"total={r2['total']}")
+        else:
+            check("半截词能搜到条目", False, "库里没有可取样的 tag")
+            check("多词是 AND（加一个不存在的词必须归零）", False, "跳过")
+
+        print("-- 参数预设 增删改查 --")
+        # 增：不带 id、新名字 → 新建
+        r = c.post("/api/gen-profiles", json={"name": "冒烟-测试预设", "steps": 30, "cfg": 5.0})
+        created = r.json()["data"]
+        check("预设·新建", r.status_code == 200 and created.get("steps") == 30,
+              f"#{created.get('id')} steps={created.get('steps')}")
+        # 改：带 id 改名 → 就地更新，不产生重复条目
+        r2 = c.post("/api/gen-profiles",
+                    json={"id": created["id"], "name": "冒烟-测试预设改", "steps": 28})
+        renamed = r2.json()["data"]
+        n_all = c.get("/api/gen-profiles").json()["data"]
+        check("预设·带 id 改名就地更新",
+              r2.status_code == 200 and renamed["id"] == created["id"]
+              and renamed["steps"] == 28
+              and sum(1 for x in n_all if x["id"] == created["id"]) == 1,
+              f"steps={renamed.get('steps')}")
+        # 改名撞到别的预设 → 409，不吞掉别人的预设
+        r3 = c.post("/api/gen-profiles",
+                    json={"id": created["id"], "name": profiles[0]["name"]})
+        check("预设·改名撞名被拒(409)", r3.status_code == 409, f"HTTP {r3.status_code}")
+        # 删：被配方引用 → 409；解绑后再删 → 200
+        c.post("/api/recipes", json={
+            "name": "冒烟-引用预设的配方",
+            "definition": {"fixed_head": "masterpiece", "slots": []},
+            "gen_profile_id": created["id"]})
+        r4 = c.delete(f"/api/gen-profiles/{created['id']}")
+        check("预设·被配方引用时拒绝删除(409)", r4.status_code == 409,
+              f"HTTP {r4.status_code} / {r4.json().get('error', {}).get('message', '')[:40]}")
+        ref = next(x for x in c.get("/api/recipes").json()["data"]
+                   if x["name"] == "冒烟-引用预设的配方")
+        c.put(f"/api/recipes/{ref['id']}", json={
+            "name": "冒烟-引用预设的配方", "definition": {"fixed_head": "masterpiece", "slots": []},
+            "gen_profile_id": None})
+        r5 = c.delete(f"/api/gen-profiles/{created['id']}")
+        check("预设·解绑后可删除", r5.status_code == 200 and r5.json()["data"]["deleted"] == created["id"],
+              f"HTTP {r5.status_code}")
+        c.delete(f"/api/recipes/{ref['id']}")
+        check("预设·清理测试配方",
+              all(x["id"] != ref["id"] for x in c.get("/api/recipes").json()["data"]))
+
         # 点选控件的数据源：路由必须排在 /{pool_id} 之前，否则会被 int 校验吞掉变 422
         hot = c.get("/api/pools/tag-suggest?limit=20")
         hot_data = hot.json()["data"] if hot.status_code == 200 else {}

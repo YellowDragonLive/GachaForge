@@ -650,7 +650,8 @@ const cases = [
       '当前池即使排在后面也要高亮（提到行首）');
     assert.ok(html.includes('<i>41</i>'), 'chip 上要带条目数，用户才知道值不值得点');
     // 只摆 limit 个池 + 「全部」：放不下的靠标题里的「N 池匹配」与下拉，不占 chip 行空间
-    assert.equal((html.match(/class="pool-chip/g) || []).length, 2, 'chip 数量要受 limit 控制');
+    assert.equal((html.match(/data-act="asm-pick-pool"/g) || []).length, 2,
+      'chip 数量要受 limit 控制');
   }],
   ['池选择接线：选择器渲染 chip 行、默认落在最佳池', () => {
     const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
@@ -660,6 +661,45 @@ const cases = [
       '打开选择器时要默认落在条目最多的匹配池');
     const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
     assert.match(css, /\.asm-pools\s*\{[^}]*overflow-x:\s*auto/, 'chip 行横向滚动，不折行');
+  }],
+  ['快速筛选：`black h` 要能命中 `black hair`', () => {
+    // 用户口径：每个长列表旁边一个 input，打半个词就能筛
+    assert.ok(W.matchQuery('black hair, long hair', 'black h'), '半截词必须命中');
+    assert.ok(W.matchQuery('black hair', 'hair black'), '词序不限');
+    assert.ok(W.matchQuery('black_hair', 'black hair'), '下划线与空格等价（库里两种写法都有）');
+    assert.ok(W.matchQuery('black hair', 'black_hair'), '反过来也要等价');
+    assert.ok(!W.matchQuery('black hair', 'black skirt'), '多词是 AND，不是 OR');
+    assert.ok(W.matchQuery('neg4all_v4', 'neg'), '前缀命中');
+    assert.ok(W.matchQuery('随便什么', ''), '空词恒真');
+    assert.deepEqual(W.queryWords('  Black   H '), ['black', 'h']);
+  }],
+  ['池筛选：搜到的池不受前 8 个截断', () => {
+    const pools = [];
+    for (let i = 0; i < 10; i += 1) {
+      pools.push({ name: `组合预设/服装-第${i}款`, kind: '服装', item_count: 10 + i });
+    }
+    pools.push({ name: 'DanbooruTAG/hair', kind: '服装', item_count: 3 });
+    const all = W.poolChipsHtml(pools, '服装', 'outfit', '', 8);
+    assert.equal((all.match(/data-act="asm-pick-pool"/g) || []).length, 9,
+      '不筛选时严格按 limit（8 池 + 全部）');
+    const hit = W.poolChipsHtml(pools, '服装', 'outfit', '', 8, '第3');
+    assert.match(hit, /data-v="组合预设\/服装-第3款"/, '筛选要真的把命中的池摆出来');
+    assert.equal((hit.match(/data-act="asm-pick-pool"/g) || []).length, 2,
+      '只命中一个池时 = 全部(清除筛选) + 1');
+    assert.match(hit, /清除筛选/, '筛选态下第一个 chip 变成清除入口');
+  }],
+  ['筛选接线：各处都有 input，不是只有一个地方能用', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    for (const id of ['pLoraPick', 'pCheckpoint', 'tCheckpoint', 'dFilterPool', 'rTplPool']) {
+      assert.match(app, new RegExp(`quickFilterHtml\\('${id}'`), `${id} 旁边要有筛选框`);
+    }
+    assert.match(app, /data-asm-pool-q/, '抽卡装配的池 chip 行要能筛');
+    assert.match(app, /pickerPool && \(!a\.pickerQ \|\| a\.pickerLocked\)/,
+      '搜索要跨池：默认池只在没搜索或用户手动锁池时生效');
+    const py = readFileSync(new URL('../backend/app/services/pools.py', import.meta.url), 'utf8');
+    assert.match(py, /def _q_clauses/, '后端搜索要分词 AND，与前端 matchQuery 同语义');
+    assert.match(py, /replace\(func\.lower\(PoolItem\.tags\), "_", " "\)/,
+      '后端也要把下划线归一成空格');
   }],
 ];
 
