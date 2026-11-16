@@ -1,49 +1,56 @@
-# SDXL Image Generation Workspace
+# 抽卡工作台
 
-这是一个用于图像生成、调试以及模型优化的工作区。
+本机单人的抽卡生图工具：**词卡 → prompt → ComfyUI 出图 → 反哺概念图库**。
+双击 `start.bat` 即可，不需要 npm、不需要联网、不需要 API key。
 
-## 核心特性
+## 快速开始
 
-- **SDXL 极速绘图 (Z-Image Turbo)**：集成 8-10 步的高速 SD3/AuraFlow 生成流。
-- **SDXL 高清文生图 (sdxl-text2img)**：采用 illustrious 等高级 CKPT 进行高质量艺术生成。
-- **SDXL 后期重绘 (sdxl-img2img)**：提供脸部、手部修复及局部重绘能力。
-
-## 默认配置升级 (2026-05-17)
-
-根据最新的艺术审美与算力开销平衡策略，我们将系统级默认参数进行了以下调优：
-
-- **默认 CKPT**：升级至 `waiIllustriousSDXL_v170.safetensors`
-- **默认步数 (Steps)**：调整为 `20` 步 (官方推荐：`15-30` 步，使用 `Euler a` 采样器)
-- **人脸修复 (Face Fix)**：默认关闭 (避免重绘引起的画风断层，完美释出原生手绘五官)
-
-## 目录结构
-
-- `outputs/`：图像生成结果文件夹
-- `_run_*.py`：临时执行脚本（自动忽略，无需提交）
-- `_run_random_scene.py`：**双重随机探索与精致生图脚本**，一键从 `action.json` 和 `wai_characters.csv` 中双重随机抽取姿势与角色，自适应匹配性别并进行电影级奢华场景构图生图。
-- `CHANGELOG.md`：改动记录
-
-## 随机探索与精致生图使用指南
-
-为方便“伟大的人工智能驾驭者”快速探索多样化高难度姿势、精美二次元角色与绝佳的光影插画，您只需在工作区运行：
-
-```powershell
-python _run_random_scene.py
+```bat
+start.bat
 ```
 
-脚本将为您全自动完成：
-1. **本地数据库深度整合**：
-   - 解析 `action.json` 提取 650+ 种有效动作标签。
-   - 解析 `wai_characters.csv` 提取 5100+ 条中文角色与英文 SD Tag 的配对数据集。
-2. **双重随机精准抽取**：随机挑选一个动作与一位角色，带来绝对未知与探索性的生图体验。
-3. **极智兼容性处理**：
-   - **自动识别性别**：分析角色 Tag 属性，智能匹配 `1girl` 或 `1boy` 等最贴切的提示词前缀。
-   - **智能权重避让**：通过正则表达式安全转义角色 Tag 中的半角括号（如将 `(azur lane)` 转为 `\(azur lane\)`），规避 SD 对括号权重的解析错误。
-4. **影院级画质强化**：结合电影级温暖豪华卧室光影色调。
-5. **规范项目归档**：成果自动命名为 `{char_name}_random_{action_name}_result.png`，并同步留存在 `random_scene_generation_YYYYMMDD/` 项目文件夹中。
+它会自动挑一个装好依赖的 Python、探测 ComfyUI（离线就自己拉起来）、建库、起服务，
+最后打开 <http://127.0.0.1:8765>。首次运行会生成 `.env`。
 
-### 成果一键同步工具
-如需将生成的所有精美大图一键提取至会话的 artifacts 归档文件夹以供离线审阅或在报告中嵌入，只需在工作区运行：
-```powershell
-python _run_copy_result.py
+不想自动拉 ComfyUI：`set GACHA_COMFY_AUTO=0` 后再启动，会走 mock 模式（占位图，链路照常可用）。
+
+## 七个视图
+
+| 视图 | 做什么 |
+|---|---|
+| 抽卡台 | 场景 + 人物 N 张 + 画风构图，点部位进池选词；一抽一张任务卡 |
+| 概念 | 抽象概念的缩略图墙，点进去看这个概念出过的所有图 |
+| 卡池 | 568 池 / 3.2 万条目的字典，可导入、编辑、启停 |
+| 配方 | 可复用的槽位模板，`__池__` 语法，支持预览 |
+| 任务 | 生图队列：排队 / 进度 / 取消 / 重试 |
+| 画廊 | 出图结果，评分与收藏影响概念封面 |
+| 设置 | 预设、checkpoint / LoRA / workflow、负向词、模型参数 |
+
+## 文档
+
+- **[docs/架构_总览.md](docs/架构_总览.md)** — 技术栈、目录、一次抽卡的完整链路、数据表、API、硬约定
+- [docs/运维_启动与验收.md](docs/运维_启动与验收.md) — 启动、验收、排障（唯一操作口径）
+- [docs/运维_数据迁移.md](docs/运维_数据迁移.md) — 旧数据导入与清空重建
+- [docs/运维_清理权重.md](docs/运维_清理权重.md) — 条目权重括号审计
+
+## 验证
+
+```bash
+python scripts/smoke_test.py       # 后端 113 项，mock + 临时库，不碰正式库
+node scripts/test_frontend.mjs     # 前端 62 项，含 data-act / 引用 / 补全三道契约
+node scripts/ui_shot.mjs           # 六视图 CDP 探针（契约全绿也可能整页空数据）
+python scripts/live_test.py        # 真实 ComfyUI 端到端，需 8188 在线
 ```
+
+## 目录
+
+```
+backend/   FastAPI + SQLite + 后台 Worker，22 张表
+frontend/  零构建 ESM + Vue 3（vendor 内本地版），由后端托管
+scripts/   固定入口脚本，start.bat 是唯一启动方式
+data/      数据库 / 出图 / 缩略图 / 语义索引（不进 git）
+docs/      架构总览 + 三本运维手册
+```
+
+根目录的 `action.json`、`zh_TW.json`、`wai_characters.csv`、`noobai_data.json`、`wai_tag_assist.json`
+是建库数据源，`scripts/reset_db.py` 清库后会读它们重建字典，**不要删**。
