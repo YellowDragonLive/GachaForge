@@ -254,9 +254,14 @@ def session_recipe_dict(db: Session, session_id: int) -> dict:
     slots = db.scalars(select(SessionRecipeSlot)
                        .where(SessionRecipeSlot.recipe_snapshot_id == r.id)
                        .order_by(SessionRecipeSlot.idx)).all()
-    extras = {e.slot_id: e for e in db.scalars(select(SlotExtra).where(
-        SlotExtra.slot_kind == "session_recipe",
-        SlotExtra.slot_id.in_([s.id for s in slots]) if slots else [])).all()}
+    # 快照可能没有槽位（老会话 / 只存了 fixed_head 的配方）。空槽位列表不能当成
+    # 空的 where 条件传给 SQLAlchemy —— 那会抛 "got []"，把整个会话接口打成 500。
+    extras: dict[int, SlotExtra] = {}
+    if slots:
+        slot_ids = [s.id for s in slots]
+        extras = {e.slot_id: e for e in db.scalars(
+            select(SlotExtra).where(SlotExtra.slot_kind == "session_recipe",
+                                    SlotExtra.slot_id.in_(slot_ids))).all()}
     out_slots = []
     for s in slots:
         d = {"pool": s.pool, "count": s.count, "weight": s.weight,
@@ -305,16 +310,19 @@ def detail_for_draws(db: Session, draw_ids: list[int]) -> dict[int, list[dict]]:
     slots = db.scalars(select(DrawSlot).where(DrawSlot.draw_id.in_(draw_ids))
                        .order_by(DrawSlot.draw_id, DrawSlot.idx)).all()
     by_slot: dict[int, list[str]] = {}
-    if slots:
-        ids = [s.id for s in slots]
+    # ids 必须无条件先算：只在 if slots 里赋值时，空 slots 会让下面 extras 直接 NameError
+    ids = [s.id for s in slots]
+    if ids:
         for slot_id, tag in db.execute(
                 select(DrawSlotTag.slot_id, DrawSlotTag.tag)
                 .where(DrawSlotTag.slot_id.in_(ids))
                 .order_by(DrawSlotTag.slot_id, DrawSlotTag.idx)).all():
             by_slot.setdefault(int(slot_id), []).append(str(tag))
-    extras = {e.slot_id: e for e in db.scalars(select(SlotExtra).where(
-        SlotExtra.slot_kind == "draw",
-        SlotExtra.slot_id.in_(ids) if ids else [])).all()}
+    extras: dict[int, SlotExtra] = {}
+    if ids:
+        extras = {e.slot_id: e for e in db.scalars(
+            select(SlotExtra).where(SlotExtra.slot_kind == "draw",
+                                    SlotExtra.slot_id.in_(ids))).all()}
     for s in slots:
         item = {"slot": s.slot, "pool": s.pool, "label": s.label,
                 "tags": by_slot.get(s.id, [])}
