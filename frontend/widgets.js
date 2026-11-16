@@ -477,17 +477,32 @@ export function makePerson(uid, gender = 'female') {
   for (const d of PERSON_SLOTS) {
     slots[d.key] = { kind: d.kind, mode: d.fallback, pick: '', tags: '' };
   }
-  return { uid, gender, slots };
+  // extra = 这个人物「意群」的自由输入：池里没有的 tag 从这里补。
+  // 一个人物卡 = 一个意群，extra 只描述这个人，不会漏到别人身上。
+  return { uid, gender, slots, extra: '' };
 }
 
-/** 场景默认值。 */
+/** 场景默认值。extra 是场景意群自己的自由输入。 */
 export function makeScene() {
   const scene = {};
   for (const d of SCENE_SLOTS) {
     scene[d.key] = { kind: d.kind, mode: d.fallback, pick: '', tags: '' };
   }
+  scene.extra = '';
   return scene;
 }
+
+/**
+ * 意群（semantic group）：一个独立的描述单元——场景是意群 1，
+ * 每张人物卡各是一个意群（人物 1 / 人物 2 …）。每个意群有自己的范围：
+ * 六格（或场景四格）+ 一个不限池的自由输入 extra。
+ * 编译 prompt 时同一意群的内容必须挨在一起，才不会把 A 的衣着写到 B 身上。
+ * 用「逗号分隔 + 相邻排列」分组，不用括号：A1111 里括号是权重 ×1.1，
+ * 不是分组语法，写了反而把整串放大、改变出图。
+ */
+export const GROUP_SCENE = '场景';
+export const groupNameOf = (idx) => `P${idx + 1}`;
+
 
 /**
  * 人数标签：由人物卡张数与各自的性别推导，不再依赖角色条目自带的 1girl。
@@ -512,16 +527,19 @@ export function countTagsFor(people) {
 }
 
 /**
- * 装配状态 → 后端可执行的配方定义。
- * 顺序：场景（背景/画风/构图）→ 人物 1 的六格 → 人物 2 的六格 …
- * 这样 prompt 里同一角色的装扮挨在一起，不会和别人的混着。
+ * 装配状态 → 后端可执行的配方定义。按「意群」顺序编译：
+ *   意群1 场景（四格 + 场景 extra）
+ *   意群2 人物1（六格 + 人物1 extra）
+ *   意群3 人物2（六格 + 人物2 extra）…
+ * 同一意群的 tag 挨在一起 = 天然分组，A 的衣着不会串到 B 身上。
+ * 旧版的全局 a.extra 也兼容：有值时并入场景意群末尾，避免老会话丢词。
  */
 export function assemblyToDefinition(assembly) {
   const a = assembly && typeof assembly === 'object' ? assembly : {};
   const scene = a.scene && typeof a.scene === 'object' ? a.scene : {};
   const people = Array.isArray(a.people) ? a.people.filter(Boolean) : [];
   const slots = [];
-  const push = (cfg) => {
+  const push = (cfg, group) => {
     if (!cfg || cfg.mode === 'off') return;
     const slot = { pool: cfg.kind || '', count: 1, weight: 1 };
     // 手填值：`pick` 是「池里的条目名」，`free` 是「用户自己写的任意 tag」。
@@ -530,8 +548,20 @@ export function assemblyToDefinition(assembly) {
     else if (cfg.mode === 'locked' && cfg.pick) slot.pick = cfg.pick;
     slots.push(slot);
   };
-  SCENE_SLOTS.forEach((d) => push(scene[d.key]));
-  people.forEach((p) => PERSON_SLOTS.forEach((d) => push(p.slots && p.slots[d.key])));
+  // 意群自己的自由输入：pool 名带上意群标记，卡片明细里能看出这句话属于谁。
+  const pushExtra = (text, group) => {
+    const v = String(text || '').trim();
+    if (v) slots.push({ pool: `任意值·${group}`, count: 1, weight: 1, free: v });
+  };
+  SCENE_SLOTS.forEach((d) => push(scene[d.key], GROUP_SCENE));
+  pushExtra(scene.extra, GROUP_SCENE);
+  // 旧会话的全局 extra：并进场景，别让升级后用户的自定义词凭空消失。
+  if (!scene.extra && a.extra) pushExtra(a.extra, GROUP_SCENE);
+  people.forEach((p, i) => {
+    const g = groupNameOf(i);
+    PERSON_SLOTS.forEach((d) => push(p.slots && p.slots[d.key], g));
+    pushExtra(p.extra, g);
+  });
   return {
     fixed_head: 'masterpiece, best quality',
     count_tags: countTagsFor(people),

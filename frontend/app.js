@@ -47,6 +47,9 @@ const state = {
     entries: [], entriesTotal: 0, entriesLoading: false,
     pickerPool: '', pickerQ: '', pickerPoolQ: '', pickerLocked: false,
   },
+  // 意群双语补全的临时 UI 态：不进装配数据、不持久化。
+  // 输入中/英文 → 候选 → 选中写英文 tag 到该意群的 extra。
+  vocab: { ready: null, items: [], q: '', scope: '', uid: 0, open: false, loading: false },
   form: { recipe_id: '', pulls: 3, count: 1, seed: '', filter: '',
     gen_profile_id: '', filterMode: 'pool' },
   // 可选控件的编辑态：过滤构造器 / LoRA 列表 / 配方槽位表
@@ -200,7 +203,10 @@ function asmSummaryText() {
   const n = a.people.length;
   const base = n ? `${n} 人 · ${countTagsFor(a.people)}` : '纯场景 · 无人物';
   // 全关是默认状态，必须写在标题上：否则「什么都没开」看起来像面板坏了
-  return assemblyIsEmpty(a) ? `${base} · 全关` : base;
+  if (assemblyIsEmpty(a)) return `${base} · 全关`;
+  // 意群自由输入会真的进 prompt；不露头的话出图对不上
+  const groups = [a.scene, ...a.people].filter((g) => g && String(g.extra || '').trim()).length;
+  return groups ? `${base} · ${groups} 个意群带自定义词` : base;
 }
 
 function assemblyPanelHtml() {
@@ -215,6 +221,108 @@ function assemblyPanelHtml() {
     </div>
     <div class="asm-body">${tab === 'scene' ? asmSceneHtml() : asmPeopleHtml()}</div>
   </div>`;
+}
+
+/**
+ * 意群自由输入：每个场景 / 每个人物卡各一个。
+ *
+ * 输入框是「查询工具」，g.extra 是「已确认的英文 tag 串」——两者分离，
+ * 所以中文查询词绝不会误进 prompt。词表本质是 英文↔中文 的 map：
+ *   中文输入 → 中文候选 → 点选写入对应英文
+ *   英文输入 → 英文候选 → 点选写入英文本身
+ * 候选一律显示「主语言 · 对照语言」双语；写进 prompt 的永远是英文 tag。
+ * 已选词以 chip 展示，可点 × 删除；输入框回车可原样追加一个英文 tag（逃生口）。
+ */
+function asmGroupInputHtml(scope, uid, label) {
+  const g = scope === 'scene' ? state.assembly.scene
+    : state.assembly.people.find((p) => p.uid === uid);
+  if (!g) return '';
+  const active = state.vocab.scope === scope
+    && Number(state.vocab.uid || 0) === Number(uid || 0);
+  const q = active ? String(state.vocab.q || '') : '';
+  const words = String(g.extra || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const su = `data-scope="${scope}" data-uid="${uid || 0}"`;
+  const chips = words.map((w, i) => `<span class="vocab-chip" title="已选词，点 × 删除">${esc(cut(w, 30))}
+    <button type="button" data-act="vocab-del" data-i="${i}" ${su} title="删除这个词">×</button></span>`).join('');
+  return `<div class="asm-extra${words.length ? ' on' : ''}" ${su}>
+    <span class="asm-extra-k">${esc(label)} · 自由词</span>
+    <input type="text" class="asm-extra-q" data-act="asm-extra" ${su}
+      value="${esc(q)}" placeholder="输入 黑发 / silver hair 查词表，点候选加入"
+      autocomplete="off" spellcheck="false"
+      title="中英文都能查；候选显示双语，点一下把英文写进这个词群">
+  </div>
+  ${words.length ? `<div class="vocab-chosen" ${su}>${chips}</div>` : ''}
+  <div class="vocab-suggest" ${su} ${active && state.vocab.open ? '' : 'hidden'}>${active ? vocabSuggestHtml() : ''}</div>`;
+}
+
+/** 补全候选行：display 已是「主 · 对照」双语；data-en 是真正写入的英文。 */
+function vocabSuggestHtml() {
+  const v = state.vocab;
+  if (v.loading) return '<div class="hint">查词表中…</div>';
+  if (!v.q.trim()) return '<div class="hint">输入中文（黑发）或英文（silver hair）看候选</div>';
+  if (!v.items.length) {
+    return `<div class="hint">词表里没有「${esc(cut(v.q, 20))}」——回车可原样写一个英文 tag</div>`;
+  }
+  return v.items.map((x, i) => `<button type="button" class="vocab-item${i === 0 ? ' first' : ''}"
+    data-act="vocab-pick" data-en="${esc(x.en)}" data-scope="${esc(v.scope)}" data-uid="${v.uid}"
+    title="${esc(x.en)} = ${esc(x.zh)}｜点一下写进这个词群">
+    <span class="vocab-en">${esc(cut(x.en, 34))}</span><span class="vocab-zh">${esc(cut(x.zh, 18))}</span>
+  </button>`).join('');
+}
+
+/** 当前激活意群的对象（场景 / 某个人物）。 */
+function vocabTarget(scope, uid) {
+  if (scope === 'scene') return state.assembly.scene;
+  return state.assembly.people.find((p) => p.uid === Number(uid)) || null;
+}
+
+/** 只刷候选容器与 chip 区，不重建输入框：打字时不能失焦。 */
+function refreshVocabParts() {
+  const v = state.vocab;
+  const box = document.querySelector(`.vocab-suggest[data-scope="${v.scope}"][data-uid="${v.uid}"]`);
+  if (box) {
+    box.innerHTML = vocabSuggestHtml();
+    box.hidden = !v.open;
+  }
+  const chosen = document.querySelector(`.vocab-chosen[data-scope="${v.scope}"][data-uid="${v.uid}"]`);
+  const g = vocabTarget(v.scope, v.uid);
+  if (g && chosen) {
+    const words = String(g.extra || '').split(',').map((x) => x.trim()).filter(Boolean);
+    chosen.innerHTML = words.map((w, i) => `<span class="vocab-chip" title="已选词，点 × 删除">${esc(cut(w, 30))}
+      <button type="button" data-act="vocab-del" data-i="${i}" data-scope="${esc(v.scope)}" data-uid="${v.uid}">×</button></span>`).join('');
+  }
+}
+
+let vocabTimer = null;
+async function loadVocabSuggest() {
+  const v = state.vocab;
+  if (!v.q.trim()) { v.items = []; v.open = true; refreshVocabParts(); return; }
+  v.loading = true; v.open = true;
+  refreshVocabParts();
+  try {
+    const data = await api.get('/api/vocab/suggest?' + new URLSearchParams({ q: v.q, limit: 12 }));
+    if (state.vocab !== v) return;           // 换意群了，丢弃旧响应
+    v.items = data.items || []; v.ready = true;
+  } catch (err) {
+    if (state.vocab !== v) return;
+    v.items = []; v.ready = false;
+  } finally {
+    if (state.vocab === v) v.loading = false;
+  }
+  refreshVocabParts();
+}
+
+/** 点候选 / 回车：把一个英文 tag 追加到该意群 extra，清空查询框。 */
+function vocabAddWord(scope, uid, en) {
+  const g = vocabTarget(scope, uid);
+  const word = String(en || '').trim();
+  if (!g || !word) return false;
+  const words = String(g.extra || '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (!words.some((w) => w.toLowerCase() === word.toLowerCase())) words.push(word);
+  g.extra = words.join(', ');
+  state.vocab.q = ''; state.vocab.open = false; state.vocab.items = [];
+  renderDraw().catch(fail);
+  return true;
 }
 
 function asmSceneHtml() {
@@ -233,6 +341,7 @@ function asmSceneHtml() {
     ${part('artist', '画师', 'l')}
     ${part('composition', '构图', 'r')}
   </div>
+  ${asmGroupInputHtml('scene', 0, '场景意群')}
   ${a.picking && a.picking.scope === 'scene' ? asmPickerHtml(a.picking.key) : ''}
   <p class="hint" style="margin:8px 0 0">画风 / 画师对所有人物统一生效。场景全关 = 白底纯人物。</p>`;
 }
@@ -295,6 +404,7 @@ function asmPersonCard(p, idx) {
       ${part('gear', 'r')}
       ${part('action', 'wide')}
     </div>
+    ${asmGroupInputHtml('person', p.uid, `P${idx + 1} 意群`)}
     ${picking ? asmPickerHtml(picking) : ''}
   </div>`;
 }
@@ -1271,6 +1381,7 @@ async function renderDraw() {
 function saveAssembly() {
   const a = state.assembly;
   try {
+    // 意群的 extra 已在 scene / people 对象里，无需单独存全局 extra
     sessionStorage.setItem(ASM_KEY, JSON.stringify({
       people: a.people, scene: a.scene, nextUid: a.nextUid, tab: a.tab,
     }));
@@ -1290,6 +1401,9 @@ function restoreAssembly() {
     state.assembly.nextUid = Number(saved.nextUid)
       || (people.reduce((m, p) => Math.max(m, Number(p.uid) || 0), 0) + 1);
     state.assembly.tab = saved.tab === 'scene' ? 'scene' : 'people';
+    // 老会话的全局 extra 迁移到场景意群，避免升级后自定义词凭空消失
+    const legacy = String(saved.extra || '').trim();
+    if (legacy && !state.assembly.scene.extra) state.assembly.scene.extra = legacy;
   } catch (_) { /* 坏数据忽略，用默认单人 */ }
 }
 
@@ -1774,6 +1888,30 @@ function onKeydown(e) {
     state.assembly.pickerQ = t.value;
     asmLoadEntries();
   }
+  if (t.dataset.act === 'asm-extra') {
+    if (e.key === 'Escape') {
+      state.vocab.open = false; renderDraw().catch(fail); return;
+    }
+    if (e.key === 'Enter') {
+      clearTimeout(vocabTimer);
+      // 有候选 → 选第一个；没有候选但输入了英文 → 原样写入（逃生口）；
+      // 没有候选且是中文 → 提示换词，绝不把中文写进 prompt。
+      const v = state.vocab;
+      if (v.items && v.items.length) {
+        vocabAddWord(v.scope, v.uid, v.items[0].en);
+        done(`已加入「${v.items[0].en}」（${v.items[0].zh}）`);
+      } else {
+        const q = t.value.trim();
+        if (!q) return;
+        if (/[\u4e00-\u9fff]/.test(q)) {
+          toast('词表里没有这个词，换一个或改用英文 tag');
+          return;
+        }
+        vocabAddWord(v.scope, v.uid, q);
+        done(`已原样加入「${q}」`);
+      }
+    }
+  }
 }
 
 // ---------------- 事件 ----------------
@@ -1838,6 +1976,21 @@ async function onClick(e) {
       case 'asm-pick': await asmPick(btn.dataset.label, btn.dataset.tags); break;
       // 手填值：同一套锁定逻辑，只是 tags 不来自池子
       case 'asm-free': await asmPick(btn.dataset.v, btn.dataset.v, true); break;
+      case 'vocab-pick': {
+        vocabAddWord(btn.dataset.scope, btn.dataset.uid, btn.dataset.en);
+        done(`已加入「${btn.dataset.en}」`);
+        break;
+      }
+      case 'vocab-del': {
+        const g = vocabTarget(btn.dataset.scope, btn.dataset.uid);
+        if (g) {
+          const words = String(g.extra || '').split(',').map((x) => x.trim()).filter(Boolean);
+          words.splice(Number(btn.dataset.i), 1);
+          g.extra = words.join(', ');
+          await renderDraw();
+        }
+        break;
+      }
       // --- 过滤构造器：三种输入方式共用一条表达式，全程点选 ---
       case 'filter-mode': await setFilterMode(btn.dataset.v); break;
       case 'tune-open': await openTuning(); break;
@@ -2152,6 +2305,16 @@ function onInput(e) {
     asmTimer = setTimeout(() => asmLoadEntries(), 280);
     return;
   }
+  if (t.dataset && t.dataset.act === 'asm-extra') {
+    // 查询框独立于 g.extra：打字只查词表、只刷候选容器，不重建 input（否则失焦）。
+    // 中文查询词绝不写进 extra —— 写进 prompt 的只能是候选对应的英文 tag。
+    state.vocab.scope = t.dataset.scope || '';
+    state.vocab.uid = Number(t.dataset.uid) || 0;
+    state.vocab.q = t.value;
+    clearTimeout(vocabTimer);
+    vocabTimer = setTimeout(() => loadVocabSuggest(), 220);
+    return;
+  }
   if (['dRecipe', 'dPulls', 'dCount', 'dSeed', 'dFilter', 'dProfile'].includes(t.id)) {
     readDrawForm();
   }
@@ -2188,6 +2351,11 @@ function onInput(e) {
 
 function onChange(e) {
   const t = e.target;
+  if (t.dataset && t.dataset.act === 'asm-extra') {
+    // 失焦收起候选；查询词不进 extra（回车选词由 onKeydown 处理）
+    state.vocab.open = false;
+    return;
+  }
   if (t.id === 'pPick') {
     // 设置页：切换正在编辑的预设
     state.settingsPid = Number(t.value) || null;

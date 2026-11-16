@@ -493,6 +493,52 @@ const cases = [
     opened.scene.background.mode = 'random';
     assert.equal(W.assemblyIsEmpty(opened), false, '打开一格就不算空');
   }],
+  ['意群：场景/人物各有自己的自由词，按意群顺序进 prompt，不串味', () => {
+    const scene = W.makeScene();
+    W.SCENE_SLOTS.forEach((d) => { scene[d.key].mode = 'off'; });
+    const p1 = W.makePerson(1, 'female');
+    const p2 = W.makePerson(2, 'male');
+    [p1, p2].forEach((p) => Object.keys(p.slots).forEach((k) => { p.slots[k].mode = 'off'; }));
+    assert.equal(typeof scene.extra, 'string', '场景有自己的 extra');
+    assert.equal(typeof p1.extra, 'string', '每个人物有自己的 extra');
+    // 全空 = 空装配；只写某个意群 = 非空
+    assert.equal(W.assemblyIsEmpty({ people: [p1, p2], scene }), true);
+    scene.extra = 'flower field';
+    p1.extra = 'black hair, watching tv';
+    p2.extra = 'blonde hair, eat beef';
+    const def = W.assemblyToDefinition({ people: [p1, p2], scene });
+    assert.equal(def.slots.length, 3, '三个意群各一个自由词槽');
+    assert.deepEqual(def.slots.map((s) => s.pool),
+      ['任意值·场景', '任意值·P1', '任意值·P2'], '槽位名标注意群，明细里看得出归属');
+    assert.deepEqual(def.slots.map((s) => s.free),
+      ['flower field', 'black hair, watching tv', 'blonde hair, eat beef'],
+      '先场景后人物1再人物2，各意群内容挨在一起，不会串味');
+    assert.ok(def.slots.every((s) => s.pick === undefined), '自由词与 pick 互斥');
+    // 旧会话的全局 extra 迁到场景，不让用户的词凭空消失
+    const g = W.makeScene();
+    const legacy = W.assemblyToDefinition({ people: [], scene: g, extra: 'legacy tag' });
+    assert.equal(legacy.slots[0].free, 'legacy tag');
+    assert.equal(legacy.slots[0].pool, '任意值·场景');
+    // 括号不是分组语法：编译结果里不出现括号包裹的整串
+    assert.ok(!def.slots.some((s) => /^\(.+\)$/.test(s.free || '')),
+      'prompt 不写括号——A1111 里那是权重，不是意群分组');
+  }],
+  ['意群自由词输入：每个意群可点选、双语候选显示、写英文', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    assert.match(app, /function asmGroupInputHtml\(scope, uid, label\)/, '有意群输入渲染函数');
+    assert.match(app, /data-act="asm-extra"/, '有查询输入框');
+    assert.match(app, /asmGroupInputHtml\('scene', 0/, '场景意群挂了输入');
+    assert.match(app, /asmGroupInputHtml\('person', p\.uid/, '每个人物卡挂了输入');
+    assert.ok(!/function asmExtraHtml\(/.test(app), '底部全局输入已拆除');
+    // 查询与结果分离：中文查询不写进 extra，只写候选的英文
+    assert.match(app, /state\.vocab\.q = t\.value/, '查询词存在独立 vocab 状态');
+    assert.match(app, /vocabAddWord\(/, '点候选写英文到意群 extra');
+    assert.match(app, /\/api\/vocab\/suggest/, '接了词表补全接口');
+    assert.match(app, /\[\\u4e00-\\u9fff\]/, '没有候选时拦住中文，不写进 prompt');
+    const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
+    assert.match(css, /\.vocab-suggest \{/, '候选下拉样式');
+    assert.match(css, /\.vocab-chip \{/, '已选词 chip 样式');
+  }],
   ['装配：app.js 接线与提交优先级', () => {
     const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
     for (const needle of ['asm-tab', 'asm-add', 'asm-del', 'asm-copy', 'asm-gender',
