@@ -13,6 +13,7 @@ import {
   splitTags, stripCountTags, portraitKeys, personTitle,
   dollFigureHtml, sceneStageHtml, DOLL_PARTS,
   rankPools, poolChipsHtml,
+  queryWords, matchQuery, quickFilterHtml,
 } from './widgets.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -31,6 +32,8 @@ const state = {
   drawJobs: {}, drawImages: {},
   // 参数预设就地编辑：高频调参不再占一个一级页面
   tuning: false, tuneDraft: null,
+  // 设置页正在编辑的预设 id：null = 新建草稿。之前写死 profiles[0]，其余预设永远改不了
+  settingsPid: null,
   gallery: { favorite: '', origin: '', min_rating: 0 },
   // 装配面板：人数 = 人物卡片张数，0 张即无人。默认单人全随机，和原来的「抽一张」等价。
   assembly: {
@@ -41,7 +44,7 @@ const state = {
     nextUid: 2,
     picking: null,          // {uid, key}：正在为哪一格的哪个人物挑条目（null 表示未展开）
     entries: [], entriesTotal: 0, entriesLoading: false,
-    pickerPool: '', pickerQ: '',
+    pickerPool: '', pickerQ: '', pickerPoolQ: '', pickerLocked: false,
   },
   form: { recipe_id: '', pulls: 3, count: 1, seed: '', filter: '',
     gen_profile_id: '', filterMode: 'pool' },
@@ -319,9 +322,11 @@ function asmEntriesHtml() {
   const a = state.assembly;
   if (a.entriesLoading) return '<div class="hint">加载中…</div>';
   const list = a.entries || [];
-  if (!list.length) return '<div class="hint">没有匹配条目：换个词，或把池切到「全部」再试</div>';
+  if (!list.length) return '<div class="hint">没有匹配条目：换个词试试（支持半截词，如 black h），或点池 chip 限定范围</div>';
   // 已经选定单池时，每行右侧再写一遍同一个池名是废话，把宽度让给条目名。
-  if (a.pickerPool) return list.map((e) => asmEntryRow(e, false)).join('');
+  // 搜索跨池时不算「单池」，仍按池分组，否则看不出这条来自哪儿。
+  const single = a.pickerPool && (!a.pickerQ || a.pickerLocked);
+  if (single) return list.map((e) => asmEntryRow(e, false)).join('');
 
   // 「全部」= 多池混排（后端每池只给几条）。按池分组，组顺序跟匹配度走，
   // 组头本身就是「只看这一池」的按钮 —— 想深挖点一下就行，不用回去找 chip。
@@ -352,7 +357,8 @@ function asmPickingKind() {
 
 function asmCountHtml() {
   const a = state.assembly;
-  return `共 ${a.entriesTotal || 0} 条${a.entriesTotal > 60 ? ' · 只显示前 60 条，用搜索缩小' : ''}`;
+  const scope = a.pickerQ && !a.pickerLocked ? ' · 跨全部匹配池搜索' : '';
+  return `共 ${a.entriesTotal || 0} 条${a.entriesTotal > 60 ? ' · 只显示前 60 条，用搜索缩小' : ''}${scope}`;
 }
 
 function asmPickerHtml(key) {
@@ -376,7 +382,12 @@ function asmPickerHtml(key) {
       <span class="hint" style="flex:1">点条目即固定，之后每抽都不变</span>
       <button type="button" class="btn small" data-act="asm-close">收起</button>
     </div>
-    <div class="asm-pools">${poolChipsHtml(state.pools, kind, key, picked)}</div>
+    <div class="row asm-pool-q"><input type="text" class="qf" data-asm-pool-q
+      value="${esc(a.pickerPoolQ)}" placeholder="筛选卡池：如 服装 / hair"
+      style="max-width:999px" autocomplete="off" spellcheck="false"
+      title="输入池名片段，chip 行只留命中的池">
+      <span class="hint" data-qf-count="asmPoolList"></span></div>
+    <div class="asm-pools" id="asmPoolList">${poolChipsHtml(state.pools, kind, key, picked, 8, a.pickerPoolQ)}</div>
     <div class="row" style="margin-top:6px">
       <select class="asm-pool" data-act="asm-pool" title="全部 ${ranked.length} 池">${asmPoolOptionsHtml(ranked, picked)}</select>
       <input type="text" class="asm-q" data-act="asm-q" value="${esc(a.pickerQ)}"
@@ -388,13 +399,36 @@ function asmPickerHtml(key) {
 }
 
 /** 下拉兜底：chip 行只摆前 8 个匹配池，剩下的都在这里，选哪池都行。 */
-function asmPoolOptionsHtml(ranked, current) {
-  const opts = [`<option value="">全部 ${ranked.reduce((s, p) => s + Number(p.item_count || 0), 0)} 条</option>`];
-  ranked.forEach((p) => {
+function asmPoolOptionsHtml(ranked, current, q = '') {
+  const words = queryWords(q);
+  const hit = words.length
+    ? ranked.filter((p) => matchQuery(`${p.name} ${p.kind}`, q))
+    : ranked;
+  const total = hit.reduce((s, p) => s + Number(p.item_count || 0), 0);
+  const opts = [`<option value="">${words.length ? '筛选后' : '全部'} ${total} 条</option>`];
+  hit.forEach((p) => {
     const name = String(p.name || '');
     opts.push(`<option value="${esc(name)}"${name === current ? ' selected' : ''}>${esc(cut(name, 34))} · ${p.item_count || 0}</option>`);
   });
+  if (words.length && !hit.length) opts.push('<option value="">没有匹配的池</option>');
   return opts.join('');
+}
+
+/** 池筛选只重画 chip 行 + 下拉，不碰外层输入框（否则每敲一字就失焦）。 */
+function refreshAsmPools() {
+  const a = state.assembly;
+  if (!a.picking) return;
+  const def = [...SCENE_SLOTS, ...PERSON_SLOTS].find((d) => d.key === a.picking.key);
+  const kind = def ? def.kind : '';
+  const ranked = rankPools(state.pools, kind, a.picking.key);
+  const box = $('#asmPoolList');
+  if (box) box.innerHTML = poolChipsHtml(state.pools, kind, a.picking.key, a.pickerPool, 8, a.pickerPoolQ);
+  const sel = $('.asm-pool');
+  if (sel) sel.innerHTML = asmPoolOptionsHtml(ranked, a.pickerPool, a.pickerPoolQ);
+  const words = queryWords(a.pickerPoolQ);
+  setQfCount('asmPoolList',
+    words.length ? ranked.filter((p) => matchQuery(`${p.name} ${p.kind}`, a.pickerPoolQ)).length : ranked.length,
+    a.pickerPoolQ);
 }
 
 function asmCurrentCfg() {
@@ -414,6 +448,7 @@ async function asmOpenPicker(scope, uid, key) {
   const a = state.assembly;
   a.picking = { scope, uid, key };
   a.entries = []; a.entriesTotal = 0; a.pickerQ = '';
+  a.pickerPoolQ = ''; a.pickerLocked = false;
   const def = [...SCENE_SLOTS, ...PERSON_SLOTS].find((d) => d.key === key);
   const best = rankPools(state.pools, def ? def.kind : '', key)
     .find((p) => Number(p.item_count || 0) > 0);
@@ -427,6 +462,7 @@ async function asmPickPool(name) {
   const a = state.assembly;
   if (!a.picking) return;
   a.pickerPool = String(name || '');
+  a.pickerLocked = true;       // 手动点过 chip = 明确要看这一池，搜索也不再跨池
   await renderDraw();          // chip 高亮与下拉选中值都要跟着变
   await asmLoadEntries();
 }
@@ -442,7 +478,10 @@ async function asmLoadEntries() {
   try {
     const qs = new URLSearchParams({ kind, limit: 60 });
     if (a.pickerQ) qs.set('q', a.pickerQ);
-    if (a.pickerPool) qs.set('pool', a.pickerPool);
+    // 搜索 = 跨池。默认落在「匹配度最高的池」只是浏览起点；一旦打了字，就该在这一类
+    // 的所有池里找 —— `black h` 想命中 `black hair`，而 hair 不在「女性时尚穿搭」池里。
+    // 只有用户手动点过 chip / 下拉，才把范围锁在他明确选中的那一池。
+    if (a.pickerPool && (!a.pickerQ || a.pickerLocked)) qs.set('pool', a.pickerPool);
     const data = await api.get('/api/pools/items?' + qs.toString());
     a.entries = data.items || [];
     a.entriesTotal = data.total || 0;
@@ -601,7 +640,11 @@ function filterPaneHtml(mode) {
     <div id="semanticHint">${semanticHintHtml()}</div>
     <div id="semanticCards">${semanticCardsHtml(state.semantics.items)}</div>`;
   }
-  return `<div class="row">
+  return `<div class="row" style="margin-bottom:6px">
+      ${quickFilterHtml('dFilterPool', '筛选卡池 / 类别（如 角色 / attire）', { width: 999 })}
+      <span class="hint" data-qf-count="dFilterPool"></span>
+    </div>
+    <div class="row">
       <select id="dFilterPool" style="flex:1;min-width:108px">${poolOptionsHtml(state.pools, state.filterPool)}</select>
       <select id="dFilterTag" style="flex:1;min-width:100px">${tagOptionsHtml(state.tagOptions, '')}</select>
       <button class="btn small primary" data-act="filter-add">＋ 添加</button>
@@ -639,6 +682,9 @@ async function openTuning() {
   const pid = Number(state.form.gen_profile_id) || null;
   const p = state.profiles.find((x) => Number(x.id) === pid) || state.profiles[0] || {};
   state.tuneDraft = {
+    // id + srcName 用来区分「就地改」与「另存为」：名字没动就更新原预设，改名即新建
+    id: p.id ?? null,
+    srcName: p.name || '',
     name: p.name || '默认参数',
     checkpoint: p.checkpoint || '',
     steps: p.steps ?? 20, cfg: p.cfg ?? 6,
@@ -665,7 +711,10 @@ function tuningHtml() {
     <div class="field"><span>保存为预设名</span>
       <input type="text" id="tName" value="${esc(t.name || '默认参数')}"></div>
     <div class="field" style="margin-top:8px"><span>checkpoint</span>
-      <select id="tCheckpoint">${ckOpts || '<option value="">（未读到模型列表，可先去设置页刷新）</option>'}</select></div>
+      <div class="row">
+        ${quickFilterHtml('tCheckpoint', '筛选 checkpoint', { width: 180 })}
+        <select id="tCheckpoint" style="flex:1;min-width:180px">${ckOpts || '<option value="">（未读到模型列表，可先去设置页刷新）</option>'}</select>
+      </div></div>
     <div class="row" style="margin-top:8px">
       <div class="field"><span>步数</span><input type="number" id="tSteps" value="${esc(t.steps)}" min="1" max="150"></div>
       <div class="field"><span>CFG</span><input type="number" id="tCfg" value="${esc(t.cfg)}" step="0.5" min="0" max="30"></div>
@@ -690,8 +739,9 @@ function tuningHtml() {
 /** 保存后立刻把表单指向这个预设，下一批抽卡就用新参数。 */
 async function saveTuning() {
   const t = state.tuneDraft || {};
+  const name = $('#tName').value.trim() || t.name;
   const body = {
-    name: $('#tName').value.trim() || t.name,
+    name,
     checkpoint: $('#tCheckpoint').value || t.checkpoint,
     // loras / workflow 必须带回：后端 upsert 会整体覆盖，漏传等于清空
     loras: t.loras || [],
@@ -704,6 +754,8 @@ async function saveTuning() {
     negative: $('#tNegative').value,
     workflow: t.workflow || 'sdxl_minimal.json',
   };
+  // 名字没改 = 就地更新这条预设；改名 = 另存为新预设（不带 id）
+  if (t.id != null && name === t.srcName) body.id = t.id;
   const saved = await api.post('/api/gen-profiles', body);
   state.profiles = await api.get('/api/gen-profiles');
   state.form.gen_profile_id = String(saved.id);
@@ -1235,7 +1287,10 @@ async function renderPools() {
   </div>
   ${items ? `<div class="panel"><div class="panel-head"><h3>条目预览（前 ${items.items.length} / ${items.total}）</h3>
       <button class="btn small" data-act="pool-close">关闭</button></div>
-      <div class="scroll">${items.items.map((i) => `<div class="chip" style="display:block;margin-bottom:4px">
+      <div class="row" style="margin-bottom:8px">
+        ${quickFilterHtml('poolItemList', '筛选条目：label / tags', { width: 999 })}
+        <span class="hint" data-qf-count="poolItemList"></span></div>
+      <div class="scroll" id="poolItemList">${items.items.map((i) => `<div class="chip" data-qtext="${esc(i.label)} ${esc(i.tags)}" style="display:block;margin-bottom:4px">
         ${esc(cut(i.label, 60))} <span class="sub">→ ${esc(cut(i.tags, 80))}</span></div>`).join('')}</div></div>` : ''}
   <div class="panel"><div class="panel-head"><h2>导入与批次</h2></div>
     <div class="row"><input type="text" id="importPath" placeholder="项目内相对路径，如 vendor/.../wildcards 或 my_pool.json" style="max-width:460px">
@@ -1271,6 +1326,9 @@ function recipeForm() {
         <div class="hint">改完点上方「读取下方 JSON」，保存时也会以这里的内容为准。</div></details>
     </div>
     <div class="field" style="margin-top:8px"><span>模板（__池名__ / __池名#3__ / __池名~__）</span>
+      <div class="row" style="margin-bottom:6px">
+        ${quickFilterHtml('rTplPool', '筛选池：输入片段', { width: 280 })}
+        <span class="hint" data-qf-count="rTplPool"></span></div>
       <div class="row" style="margin-bottom:6px">
         <select id="rTplPool" style="max-width:280px">${slotPoolOptionsHtml(state.pools, '')}</select>
         <button class="btn small" data-act="tpl-insert">插入 __池名__</button></div>
@@ -1431,8 +1489,16 @@ function refreshLoraRows() {
 }
 
 async function renderSettings() {
-  try { state.models = await api.get('/api/comfy/models'); } catch (_) { state.models = {}; }
-  const p = state.profiles[0] || {};
+  // 模型列表只在为空时才拉：ComfyUI /object_info 可能要几十秒，
+  // 每次切预设 / 保存都重拉会让表单冻结在那儿，看起来像「点了没反应」。
+  // 想手动刷新模型列表（新装了 LoRA / 换了 checkpoint）用左栏「刷新状态」。
+  if (!Array.isArray(state.models?.checkpoints) || !state.models.checkpoints.length) {
+    try { state.models = await api.get('/api/comfy/models'); } catch (_) { state.models = {}; }
+  }
+  // 只编辑选中的那条；删掉/新建后指向有效条目。之前写死 profiles[0]。
+  state.settingsPid = state.profiles.some((x) => x.id === state.settingsPid)
+    ? state.settingsPid : (state.profiles[0]?.id ?? null);
+  const p = state.profiles.find((x) => x.id === state.settingsPid) || {};
   const c = state.config;
   state.loraDraft = normalizeLoras(p.loras || []);
   const models = (state.models.checkpoints || []).map((m) =>
@@ -1465,9 +1531,22 @@ async function renderSettings() {
     </div>
     <div class="panel"><div class="panel-head"><h2>生成参数预设</h2>
       <span class="sub">保存后新抽卡会话生效</span></div>
-      <div class="field"><span>预设名</span><input type="text" id="pName" value="${esc(p.name || '默认 SDXL')}"></div>
+      <div class="row" style="margin-bottom:10px">
+        <select id="pPick" style="flex:1;min-width:150px">${state.profiles.map((x) =>
+          `<option value="${esc(x.id)}" ${x.id === p.id ? 'selected' : ''}>${esc(x.name)} · #${x.id}</option>`).join('')
+          || '<option value="">（还没有预设）</option>'}</select>
+        <button class="btn small" data-act="profile-new">＋ 新建</button>
+        <button class="btn small danger" data-act="profile-del" ${p.id ? '' : 'disabled'}
+          title="${esc(p.name || '')}">删除</button>
+      </div>
+      <div class="field"><span>预设名</span><input type="text" id="pName"
+        value="${esc(p.name || (p.id ? '默认 SDXL' : '新预设'))}"></div>
       <div class="field" style="margin-top:8px"><span>Checkpoint · 点选，来自 ComfyUI /object_info</span>
-        <select id="pCheckpoint"><option value="">（留空 = ComfyUI 默认）</option>${models}</select>
+        <div class="row">
+          ${quickFilterHtml('pCheckpoint', '筛选 checkpoint：如 sdxl / wai', { width: 200 })}
+          <select id="pCheckpoint" style="flex:1;min-width:210px"><option value="">（留空 = ComfyUI 默认）</option>${models}</select>
+          <span class="hint" data-qf-count="pCheckpoint"></span>
+        </div>
         <details class="advanced"><summary>手动填写 ckpt 文件名（一般不需要）</summary>
           <input type="text" id="pCheckpointFree" placeholder="或手动填写 ckpt 文件名"
             value="${esc(p.checkpoint || '')}"></details></div>
@@ -1485,6 +1564,11 @@ async function renderSettings() {
         <input type="text" id="pNegative" value="${esc(p.negative || '')}"></div>
       <div class="field picker" style="margin-top:12px"><span>LoRA · 点选文件 + 调权重，无需写 JSON</span>
         <div class="row">
+          ${quickFilterHtml('pLoraPick', '筛选 LoRA：neg / style / 画风', { width: 220 })}
+          <span class="hint" data-qf-count="pLoraPick"></span>
+          <span class="hint">共 ${(state.models.loras || []).length} 个文件</span>
+        </div>
+        <div class="row" style="margin-top:6px">
           <select id="pLoraPick" style="flex:1;min-width:190px">${loraOptionsHtml(state.models.loras || [], state.loraDraft)}</select>
           <label class="mini">权重<input type="number" id="pLoraWeight" value="0.8"
             step="0.05" min="-4" max="4" style="width:86px"></label>
@@ -1492,11 +1576,86 @@ async function renderSettings() {
         </div>
         <div id="loraRows" style="margin-top:8px">${loraRowsHtml(state.loraDraft)}</div>
         <div class="hint">${(state.models.loras || []).length
-          ? '顺序即加载顺序，可用 ↑ ↓ 调整；权重同时作用于 model / clip。'
+          ? '先在上面的框里筛（如 neg → neg4all…safetensors），回车直接选中；顺序即加载顺序，可用 ↑ ↓ 调整。负向 LoRA（neg4all 之类）把权重填成负数，例如 -1。'
           : '当前没有可用的 LoRA 文件（mock 模式或 ComfyUI 未加载 LoRA），可留空只用 checkpoint。'}</div>
       </div>
       <div class="row" style="margin-top:12px"><button class="btn primary" data-act="profile-save">保存预设</button></div>
     </div></div>`;
+}
+
+// ---------------- 快速筛选：一个 input 让长列表就地变短 ----------------
+// 一个处理器服务所有落点：select 隐藏不匹配的 option；普通容器隐藏不匹配的子项。
+// 输入即过滤，Enter 直接选中第一个匹配项，Esc 清空 —— 「筛 → 选 → 重来」三种键盘动作，
+// 鼠标用户照旧点。落点见设置页（LoRA / checkpoint）、调参抽屉、抽卡装配、配方模板池。
+function applyQuickFilter(el, q) {
+  if (!el) return 0;
+  const words = queryWords(q);
+  let shown = 0;
+  if (el.tagName === 'SELECT') {
+    for (const o of el.options) {
+      const hit = !words.length || matchQuery(`${o.textContent} ${o.value}`, q);
+      // 当前值永远留着：隐藏它会让用户以为预设是空的，保存时还以为丢了
+      o.hidden = !(hit || (o.value && o.value === el.value));
+      if (hit) shown += 1;
+    }
+    el.querySelectorAll('optgroup').forEach((g) => {
+      g.hidden = ![...g.children].some((o) => !o.hidden);
+    });
+    // 还没选过东西时自动落在第一个命中项：筛「neg」下拉直接停在 neg4all…，
+    // 不用再点开确认。已有选择的场合不抢（Enter 才是明确的「就选这个」）。
+    if (!el.value) {
+      const hit = [...el.options].find((o) => !o.hidden && o.value);
+      if (hit) el.value = hit.value;
+    }
+  } else {
+    for (const k of el.querySelectorAll('[data-qtext]')) {
+      const hit = !words.length || matchQuery(k.dataset.qtext || k.textContent, q);
+      k.hidden = !hit;
+      if (hit) shown += 1;
+    }
+  }
+  return shown;
+}
+
+/** 筛选框右侧的小计数：「12 项」，清空后消失，不占常驻空间。 */
+function setQfCount(targetId, n, q) {
+  const box = document.querySelector(`[data-qf-count="${targetId}"]`);
+  if (box) box.textContent = String(q || '').trim() ? `${n} 项` : '';
+}
+
+function onQuickFilterInput(t) {
+  const el = document.getElementById(t.dataset.qf);
+  setQfCount(t.dataset.qf, applyQuickFilter(el, t.value), t.value);
+}
+
+function onQuickFilterKey(t, e) {
+  const el = document.getElementById(t.dataset.qf);
+  if (e.key === 'Escape') {
+    t.value = '';
+    setQfCount(t.dataset.qf, applyQuickFilter(el, ''), '');
+    return;
+  }
+  if (e.key !== 'Enter' || !el || el.tagName !== 'SELECT') return;
+  // 回车即选定第一个匹配项：`neg` + Enter 就落定，不用再点开下拉找
+  const hit = [...el.options].find((o) => !o.hidden && o.value);
+  if (!hit) return;
+  e.preventDefault();
+  if (el.value !== hit.value) {
+    el.value = hit.value;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+}
+
+function onKeydown(e) {
+  const t = e.target;
+  if (!t.dataset) return;
+  if (t.dataset.qf) { onQuickFilterKey(t, e); return; }
+  if (t.dataset.act === 'asm-q' && e.key === 'Enter') {
+    // 回车立刻搜，不等防抖：`black h` + Enter = 直接看到 black hair
+    clearTimeout(asmTimer);
+    state.assembly.pickerQ = t.value;
+    asmLoadEntries();
+  }
 }
 
 // ---------------- 事件 ----------------
@@ -1772,25 +1931,50 @@ async function onClick(e) {
         a.href = URL.createObjectURL(blob); a.download = 'gacha_gallery_meta.json'; a.click();
         URL.revokeObjectURL(a.href); done('元数据已导出'); break;
       }
-      case 'comfy-refresh': await refreshStatusOnly(); await renderSettings(); break;
+      case 'comfy-refresh':
+        await refreshStatusOnly();
+        // 「刷新状态」显式重拉模型列表：新装的 LoRA / checkpoint 要靠它出现
+        try { state.models = await api.get('/api/comfy/models'); } catch (_) { /* 保留旧列表 */ }
+        await renderSettings(); break;
       case 'token-save': {
         const t = $('#pToken').value.trim();
         if (t) localStorage.setItem('gacha_token', t);
         else localStorage.removeItem('gacha_token');
         done(t ? '令牌已保存到本机浏览器' : '已清除令牌'); break;
       }
+      case 'profile-new':
+        // 新建草稿：清空选择，表单按默认值摆好，填名字保存即新预设
+        state.settingsPid = null;
+        state.loraDraft = [];
+        await renderSettings(); done('已切到新建：填好参数后点「保存预设」'); break;
+      case 'profile-del': {
+        const pid = state.settingsPid;
+        if (!pid) break;
+        const cur = state.profiles.find((x) => x.id === pid);
+        if (!confirm(`确定删除预设「${cur?.name || pid}」？被配方引用时会删除失败。`)) break;
+        await api.del(`/api/gen-profiles/${pid}`);
+        state.profiles = await api.get('/api/gen-profiles');
+        if (String(state.form.gen_profile_id) === String(pid)) state.form.gen_profile_id = '';
+        state.settingsPid = null;
+        sessionStorage.setItem(FORM_KEY,
+          JSON.stringify({ ...state.form, filterPool: state.filterPool }));
+        done('预设已删除'); await renderSettings(); break;
+      }
       case 'profile-save': {
         const loras = normalizeLoras(state.loraDraft);
         const cp = $('#pCheckpointFree')?.value.trim() || $('#pCheckpoint').value;
-        await api.post('/api/gen-profiles', {
+        const saved = await api.post('/api/gen-profiles', {
+          // 带 id = 就地更新（改名不再产生重复预设）；新建草稿时不带 id
+          id: state.settingsPid || undefined,
           name: $('#pName').value.trim(), checkpoint: cp, loras,
           steps: num($('#pSteps').value, 20), cfg: num($('#pCfg').value, 6),
           width: num($('#pWidth').value, 1024), height: num($('#pHeight').value, 1360),
           sampler: $('#pSampler').value, scheduler: $('#pScheduler').value,
           negative: $('#pNegative').value, workflow: 'sdxl_minimal.json',
         });
+        state.settingsPid = saved.id;
         state.profiles = await api.get('/api/gen-profiles');
-        done('预设已保存'); await renderSettings(); break;
+        done(`预设已保存：${saved.name}`); await renderSettings(); break;
       }
       default: break;
     }
@@ -1833,6 +2017,14 @@ async function onRoute() {
 
 function onInput(e) {
   const t = e.target;
+  if (t.dataset && t.dataset.qf) { onQuickFilterInput(t); return; }
+  if (t.dataset && t.dataset.asmPoolQ !== undefined) {
+    // 池筛选要重排 chip 行本身（命中的池可能排在原前 8 之外），所以重渲染容器而不是隐藏子项；
+    // 输入框在外层、不参与重绘，打字不会失焦。
+    state.assembly.pickerPoolQ = t.value;
+    refreshAsmPools();
+    return;
+  }
   if (t.dataset && t.dataset.act === 'asm-q') {
     // 装配选择器的搜索：防抖后只刷新条目列表，不动输入框本身
     state.assembly.pickerQ = t.value;
@@ -1876,6 +2068,12 @@ function onInput(e) {
 
 function onChange(e) {
   const t = e.target;
+  if (t.id === 'pPick') {
+    // 设置页：切换正在编辑的预设
+    state.settingsPid = Number(t.value) || null;
+    renderSettings().catch(fail);
+    return;
+  }
   if (t.dataset && t.dataset.act === 'asm-pool') {
     state.assembly.pickerPool = t.value;
     asmLoadEntries();
@@ -1956,6 +2154,7 @@ async function boot() {
   view.addEventListener('click', onClick);
   view.addEventListener('change', onChange);
   view.addEventListener('input', onInput);
+  view.addEventListener('keydown', onKeydown);
   view.addEventListener('mouseover', onCoverOver);
   view.addEventListener('mouseout', onCoverOut);
   view.addEventListener('focusin', onCoverOver);

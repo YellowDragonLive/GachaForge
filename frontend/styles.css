@@ -522,3 +522,14 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
   .char-body { grid-template-columns: minmax(0, 1fr) 84px minmax(0, 1fr); }
   .doll-person { min-height: 104px; }
 }
+
+/* ---------------- 快速筛选：长列表旁边那个小 input ---------------- */
+/* 一个 qf 输入框服务所有落点（LoRA / checkpoint / 卡池 / 条目预览），
+   视觉上比主下拉轻一档：它是「缩小范围」的工具，不该抢主操作的位置。 */
+.qf { font-size: 12px; padding: 5px 8px; background: var(--surface-2); }
+.qf::placeholder { color: var(--muted); }
+[data-qf-count] { font-size: 11px; min-width: 32px; }
+.asm-pool-q { margin: 6px 0 2px; gap: 6px; }
+.asm-pool-q .qf { flex: 1 1 120px; }
+/* 被筛掉的元素必须真的消失：chip / 按钮自带 display，单靠 [hidden] 会被盖掉 */
+[data-qtext][hidden] { display: none; }

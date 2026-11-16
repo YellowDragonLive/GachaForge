@@ -124,6 +124,37 @@ export function tagOptionsHtml(items, selected) {
   ).join('')}`;
 }
 
+// ---------------- 快速筛选：一个 input 过滤任意长列表 ----------------
+// 口径来自用户：「各个地方提供一个 input 能快速筛选」——抽卡里 `black h` → `black hair`，
+// LoRA 里 `neg` → `neg4all…safetensors`。所以这里只回答「这段文本算不算命中」，
+// 真正的显隐交给 app.js（本模块零 DOM 依赖，Node 单测可直接跑）。
+//
+// 规则故意宽松：
+//   · 空格分词、AND（每个词都要命中，顺序不限）
+//   · `_` / `\` 归一成空格：`black_hair`、`eyewear_glasses` 两种写法都能搜到
+//   · 子串匹配，所以只打半个词也能出结果（`black h` 命中 `black hair`）
+export function queryWords(q) {
+  return String(q ?? '').toLowerCase().replace(/[_\\]/g, ' ')
+    .split(/\s+/)
+    .map((s) => s.replace(/^[,，]+|[,，]+$/g, ''))
+    .filter(Boolean);
+}
+
+export function matchQuery(text, q) {
+  const words = queryWords(q);
+  if (!words.length) return true;
+  const hay = String(text ?? '').toLowerCase().replace(/[_\\]/g, ' ');
+  return words.every((w) => hay.includes(w));
+}
+
+/** 筛选框本体。target = 受控元素的 id（select 或带 data-qtext 子项的容器）。 */
+export function quickFilterHtml(target, placeholder = '筛选：输入片段', opts = {}) {
+  const width = Number(opts.width || 172);
+  return `<input type="text" class="qf" data-qf="${esc(target)}" autocomplete="off"
+    spellcheck="false" style="max-width:${width}px"
+    placeholder="${esc(placeholder)}" title="${esc(opts.title || placeholder)}">`;
+}
+
 // ---------------- LoRA：下拉 + 权重行，自动组装 JSON ----------------
 export function normalizeLoras(raw) {
   let rows = raw;
@@ -743,22 +774,154 @@ export function rankPools(pools, kind, key) {
  * 匹配到的池摆成一行可点的 chip：「全部 1234」在最前，后面按匹配度排。
  * 一行横向滚动而不是折成三行——左栏只有 392px，折行会把条目列表挤出屏幕。
  */
-export function poolChipsHtml(pools, kind, key, selected, limit = 8) {
+
+// ---------------- 池图标：让 568 个池名一眼分出「这一池装的是什么」 ----------------
+// 只认池名关键词，不只看 kind：同一个 kind 里混得很杂（「风格」19 池里 12 个是
+// 乐器，「物品」69 池几乎全是食物和花）。按 kind 一刀切会给出错误信息——把「食物」
+// 池标成剑，用户点进去才发现是 sausage。认出「这池其实是花」才是有用的信息。
+// 顺序即优先级：先把混进来的离题类认掉，再认这一格的正主。
+const ICON_PATHS = {
+  close: ['<path d="M4.2 4.2 L11.8 11.8"/><path d="M11.8 4.2 L4.2 11.8"/>'],
+  shirt: ['<path d="M5.6 2.8 L3.2 3.9 L2.4 6.5 L4.4 7.2 V13.2 H11.6 V7.2 L13.6 6.5 L12.8 3.9 L10.4 2.8"/>',
+    '<path d="M5.6 2.8 A2.4 2.4 0 0 0 10.4 2.8"/>'],
+  hair: ['<circle cx="8" cy="9.3" r="3.8"/>',
+    '<path d="M3.9 7.5 A4.1 4.1 0 0 1 12.1 7.5"/>',
+    '<path d="M12.1 7.5 C12.6 9.8 12.3 11.6 11.6 12.8"/>'],
+  face: ['<circle cx="8" cy="8" r="5.4"/>',
+    '<circle class="ifill" cx="6.2" cy="6.9" r=".75"/>',
+    '<circle class="ifill" cx="9.8" cy="6.9" r=".75"/>',
+    '<path d="M5.9 9.7 C6.6 11 9.4 11 10.1 9.7"/>'],
+  run: ['<circle cx="9.6" cy="3.5" r="1.6"/>',
+    '<path d="M9.2 5.7 L6.9 8.3"/><path d="M9.2 5.9 L11.6 8"/>',
+    '<path d="M6.9 8.3 L5 11 L3 12"/><path d="M6.9 8.3 L9 11 L10.6 13.2"/>'],
+  sword: ['<path d="M13.1 2.9 L6.4 9.6"/><path d="M4.6 7.8 L8.2 11.4"/>',
+    '<path d="M3.2 12.8 L5.4 10.6"/>'],
+  gem: ['<path d="M4.2 5.8 L8 2.6 L11.8 5.8 L8 13.2 Z"/>',
+    '<path d="M4.2 5.8 H11.8 M8 5.8 V13.2"/>'],
+  mountain: ['<path d="M2.2 12.7 L6.3 5.5 L8.7 9.5 L10.3 7.2 L13.8 12.7 Z"/>',
+    '<circle cx="11.8" cy="4.2" r="1.5"/>'],
+  brush: ['<path d="M11.9 2.6 L13.4 4.1 L7 10.5 L4.1 11.4 L5 8.5 Z"/>',
+    '<path d="M10.2 4.3 L11.7 5.8"/>'],
+  frame: ['<rect x="2.4" y="3.4" width="11.2" height="9.2" rx="1"/>',
+    '<path d="M2.4 8 H13.6 M8 3.4 V12.6"/>'],
+  person: ['<circle cx="8" cy="5.4" r="2.6"/>',
+    '<path d="M3.4 13.4 C3.4 10.4 5.4 9 8 9 C10.6 9 12.6 10.4 12.6 13.4"/>'],
+  bag: ['<path d="M3 5.8 H13 V13.2 H3 Z"/>',
+    '<path d="M5.8 5.8 V4.2 A2.2 2.2 0 0 1 10.2 4.2 V5.8"/>'],
+  food: ['<path d="M5.1 2.8 V13.2"/>',
+    '<path d="M3.5 2.8 V5.1 A1.6 1.6 0 0 0 6.7 5.1 V2.8"/>',
+    '<path d="M10.9 13.2 V2.8 C12.7 3.6 12.7 7.2 10.9 7.6"/>'],
+  flower: ['<circle cx="8" cy="5.5" r="1.8"/><circle cx="8" cy="10.5" r="1.8"/>',
+    '<circle cx="5.5" cy="8" r="1.8"/><circle cx="10.5" cy="8" r="1.8"/>',
+    '<circle class="ifill" cx="8" cy="8" r="1.1"/>'],
+  note: ['<path d="M6.5 11.5 V3.6 L12 2.7 V10.6"/>',
+    '<circle cx="5.1" cy="11.7" r="1.5"/><circle cx="10.6" cy="10.8" r="1.5"/>'],
+  drop: ['<path d="M8 2.4 C8 2.4 4.2 6.8 4.2 9.3 A3.8 3.8 0 0 0 11.8 9.3 C11.8 6.8 8 2.4 8 2.4 Z"/>'],
+  camera: ['<rect x="2.2" y="5.2" width="11.6" height="7.8" rx="1.6"/>',
+    '<circle cx="8" cy="9.1" r="2.5"/>', '<path d="M5.9 5.2 L6.8 3.3 H9.2 L10.1 5.2"/>'],
+  layers: ['<path d="M8 2.4 L13.4 5.2 L8 8 L2.6 5.2 Z"/>',
+    '<path d="M2.6 8 L8 10.8 L13.4 8"/><path d="M2.6 10.8 L8 13.6 L13.4 10.8"/>'],
+  body: ['<circle cx="8" cy="3.9" r="1.7"/>',
+    '<path d="M8 5.6 V10 M5.6 7.2 H10.4 M8 10 L6.2 13.2 M8 10 L9.8 13.2"/>'],
+  eye: ['<path d="M1.7 8 C3.7 4.7 12.3 4.7 14.3 8 C12.3 11.3 3.7 11.3 1.7 8 Z"/>',
+    '<circle cx="8" cy="8" r="2.2"/>'],
+  paw: ['<circle cx="5" cy="5.5" r="1.35"/><circle cx="8" cy="4.3" r="1.35"/>',
+    '<circle cx="11" cy="5.5" r="1.35"/>',
+    '<path d="M8 7.7 C10.5 7.7 12.3 9.5 12.3 11.3 C12.3 12.7 11.1 13.1 10.1 13.1 C9.2 13.1 8.6 12.5 8 12.5 C7.4 12.5 6.8 13.1 5.9 13.1 C4.9 13.1 3.7 12.7 3.7 11.3 C3.7 9.5 5.5 7.7 8 7.7 Z"/>'],
+  glasses: ['<circle cx="4.7" cy="8.8" r="2.6"/><circle cx="11.3" cy="8.8" r="2.6"/>',
+    '<path d="M7.3 8.8 H8.7 M2.1 7.9 L3.3 5.2 M13.9 7.9 L12.7 5.2"/>'],
+  pen: ['<path d="M8 2.3 L11.7 10.3 L8 13.7 L4.3 10.3 Z"/><path d="M8 2.3 V9.7"/>'],
+  grid: ['<rect x="2.6" y="2.6" width="4.5" height="4.5" rx=".9"/>',
+    '<rect x="8.9" y="2.6" width="4.5" height="4.5" rx=".9"/>',
+    '<rect x="2.6" y="8.9" width="4.5" height="4.5" rx=".9"/>',
+    '<rect x="8.9" y="8.9" width="4.5" height="4.5" rx=".9"/>'],
+  tag: ['<path d="M2.6 8.6 V3.4 A.8 .8 0 0 1 3.4 2.6 H8.6 L13.4 7.4 L8.6 12.6 Z"/>',
+    '<circle cx="5.4" cy="5.4" r=".9"/>'],
+};
+
+/** kind 兜底：池名一个关键词都没命中时，至少按类别给个不倒胃口的东西。 */
+const KIND_ICON = {
+  角色: 'person', 发型: 'hair', 表情: 'face', 服装: 'shirt', 物品: 'bag',
+  动作: 'run', 背景: 'mountain', 风格: 'brush', 构图: 'frame', 身体: 'body',
+  动物: 'paw', 眼睛: 'eye', 画师: 'pen', 颜色: 'drop', 标签: 'tag',
+};
+
+const ICON_RULES = [
+  // 先把「混在别类里」的池认掉——这几类在库里条目极多，认错会一直误导。
+  [/(?:^|[^a-z])(?:food|bread|meat|fruit|vegetable|drink|dairy|sweets|utensil|cuisine|dish|snack|candy)/i, 'food'],
+  [/食物|料理|甜点|饮品|厨具|餐具|水果|蔬菜|肉类|面包/, 'food'],
+  [/flower|blossom|plant|tree|leaf|herb|garden|floral|花卉|植物|树木|花/i, 'flower'],
+  [/audio[_ -]|instrument|guitar|piano|violin|drum|trumpet|flute|music|乐器|音效/i, 'note'],
+  // 眼睛要排在「颜色」前面：eyes_iris_colors 这类池名带 colors，但它讲的是眼睛。
+  [/eyes?_|eye[_ -]|眼睛|瞳孔|瞳/i, 'eye'],
+  [/eyewear|glasses|sunglasses|眼镜/i, 'glasses'],
+  [/color|colour|palette|hue|色彩|配色/i, 'drop'],
+  [/camera|lens|photograph|镜头|机位/i, 'camera'],
+  // 再认这一格的正主。
+  [/hair|发型|头发/i, 'hair'],
+  [/face|expression|emote|表情|面部|五官/i, 'face'],
+  [/weapon|sword|gun|armor|equip|equpment|装备|武器|道具/i, 'sword'],
+  [/accessor|jewel|necklace|earring|首饰|配饰|饰品/i, 'gem'],
+  [/outfit|attire|cloth|costume|wear|dress|uniform|skirt|shirt|shoe|sock|服装|衣服|穿搭|裙|鞋|袜/i, 'shirt'],
+  [/action|pose|posture|gesture|动作|姿态|摆位/i, 'run'],
+  [/composition|framing|构图|视角|三分|取景/i, 'frame'],
+  [/background|location|scenery|interior|exterior|建筑|室内|室外|场景|都市|奇幻|景观|天象|背景/i, 'mountain'],
+  [/style|movement|film|texture|画风|风格|纹理|材质/i, 'brush'],
+  [/preset|组合预设|合集|bundle/i, 'layers'],
+  [/body|anatomy|身体|器官/i, 'body'],
+  [/animal|creature|(?:^|[^a-z])(?:cats?|dogs?|birds?)(?:[_ ]|$)|兽|动物|宠物/i, 'paw'],
+  [/画师|artists?(?:\/|$)/i, 'pen'],
+  [/character|角色|人物/i, 'person'],
+];
+
+/**
+ * 池 → 图标 key。`name` 与 `kind` 一起看，但池名优先（见上）。
+ * 认不出来时按 kind 兜底，再不行给个标签——绝不返回空。
+ */
+export function poolIcon(name, kind) {
+  // 只拿池名去匹配。把 kind 拼进来会盖住池名本身的信息：kind=眼睛 的所有池都会
+  // 命中「眼睛」而丢掉 eyewear→眼镜 的区分，等于白分。kind 只在池名一个关键词
+  // 都没命中时兜底（「物品」这种就叫「物品」的池靠它拿到袋子图标）。
+  const text = String(name || '');
+  for (const [re, key] of ICON_RULES) if (re.test(text)) return key;
+  return KIND_ICON[String(kind || '')] || 'tag';
+}
+
+/** 按 key 直接出 SVG：图标尺寸固定 13px（CSS 写死），所以不需要 non-scaling-stroke。 */
+export function iconSvg(key) {
+  const parts = ICON_PATHS[key] || ICON_PATHS.tag;
+  return `<svg class="pico" viewBox="0 0 16 16" aria-hidden="true">${parts.join('')}</svg>`;
+}
+
+/** 池 → SVG。chip、组头、下拉左图标全走这一个入口，保证同一池在各处长得一样。 */
+export const poolIconHtml = (name, kind) => iconSvg(poolIcon(name, kind));
+
+export function poolChipsHtml(pools, kind, key, selected, limit = 8, q = '') {
   const ranked = rankPools(pools, kind, key);
   const total = ranked.reduce((s, p) => s + Number(p.item_count || 0), 0);
-  const chip = (v, label, count, on) => `<button type="button"
+  // 每个 chip 前挂一枚图标：106 个池里「能穿的衣服」和「混进来的乐器」文字上分不出，
+  // 图标先给一眼判断。文字从 13 字收到 11 字，把宽度让给图标。
+  const chip = (v, label, count, on, ico) => `<button type="button"
     class="pool-chip${on ? ' on' : ''}" data-act="asm-pick-pool" data-v="${esc(v)}"
-    title="${esc(label)} · ${count} 条">${esc(cut(label, 13))}<i>${count}</i></button>`;
-  const n = Math.max(1, limit);
-  let shown = ranked.slice(0, n);
+    data-qtext="${esc(label)} ${esc(count)}"
+    title="${esc(label)} · ${count} 条">${ico || poolIconHtml(label, kind)}<span
+    class="pool-chip-n">${esc(cut(label, 11))}</span><i>${count}</i></button>`;
+  // 有筛选词时不按「前 8 个匹配池」截断：搜「服装」命中的池很可能排在第 12 位，
+  // 截断等于搜了没反应。改成把命中的池全摆出来（上限 30），顺序仍按部位匹配度。
+  const words = queryWords(q);
+  const poolHit = (p) => matchQuery(p.name, q) || matchQuery(p.kind, q);
+  const hits = words.length
+    ? ranked.filter(poolHit).slice(0, 30)
+    : ranked.slice(0, Math.max(1, limit));
+  let shown = hits;
   // 选中的池如果排在前 n 个之外（从下拉里选的），也要把它提到行首，
   // 否则用户看不到自己当前在哪一池 —— 高亮必须永远可见。
   const sel = ranked.find((p) => p.name === selected);
-  if (sel && !shown.includes(sel)) shown = [sel, ...shown.slice(0, n - 1)];
+  if (sel && !shown.includes(sel)) shown = [sel, ...shown.slice(0, Math.max(0, shown.length - 1))];
   // 不放「还有 N 池」的提示：左栏只有 392px，一截文字就挤掉一个可点的池。
   // 池总数写在选择器标题上（「106 池匹配」），剩下的池去下面那个下拉里找。
   return [
-    chip('', '全部', total, !selected),
+    chip('', words.length ? '清除筛选' : '全部', total, !selected, iconSvg(words.length ? 'close' : 'grid')),
     ...shown.map((p) => chip(p.name, p.name, Number(p.item_count || 0), p.name === selected)),
   ].join('');
 }

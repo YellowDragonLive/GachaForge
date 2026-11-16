@@ -29,6 +29,24 @@ def _count(db: Session, pool_id: int) -> int:
                          .where(PoolItem.pool_id == pool_id)) or 0)
 
 
+# ---------------- 条目搜索：前端「快速筛选」的后端一半 ----------------
+# 用户口径：输入片段就能筛（`black h` → `black hair`）。所以：
+#   · 空格分词后 AND，顺序不限（`hair black` 同样命中）
+#   · `_` 与空格等价：库里两种写法都有（`black_hair` / `black hair`），搜索时两边都归一
+#   · 半截词照样命中（子串），不要求用户打完整词
+def _q_words(q: str) -> list[str]:
+    return [w for w in re.sub(r"[_\\]", " ", (q or "").lower()).split() if w]
+
+
+def _q_clauses(q: str) -> list:
+    out = []
+    for w in _q_words(q):
+        like = f"%{w}%"
+        out.append(func.replace(func.lower(PoolItem.label), "_", " ").like(like)
+                   | func.replace(func.lower(PoolItem.tags), "_", " ").like(like))
+    return out
+
+
 def list_pools(db: Session, *, enabled_only: bool = False) -> list[dict]:
     stmt = select(Pool).order_by(Pool.kind, Pool.slug)
     if enabled_only:
@@ -80,9 +98,9 @@ def list_items(db: Session, pool_id: int, *, q: str = "",
     stmt = select(PoolItem).where(PoolItem.pool_id == pool_id)
     count_stmt = select(func.count()).select_from(PoolItem).where(PoolItem.pool_id == pool_id)
     if q:
-        like = f"%{q}%"
-        stmt = stmt.where(PoolItem.label.like(like) | PoolItem.tags.like(like))
-        count_stmt = count_stmt.where(PoolItem.label.like(like) | PoolItem.tags.like(like))
+        for clause in _q_clauses(q):
+            stmt = stmt.where(clause)
+            count_stmt = count_stmt.where(clause)
     total = int(db.scalar(count_stmt) or 0)
     rows = db.scalars(stmt.order_by(PoolItem.id).limit(min(500, limit)).offset(offset)).all()
     return {"total": total, "items": [
@@ -204,10 +222,9 @@ def list_items(db: Session, *, kind: str = "", q: str = "", pool: str = "",
     if pk:
         base = base.where(func.lower(Pool.name).contains(pk)
                           | func.lower(Pool.slug).contains(pk))
-    ql = (q or "").strip().lower()
-    if ql:
-        base = base.where(func.lower(PoolItem.label).contains(ql)
-                          | func.lower(PoolItem.tags).contains(ql))
+    clauses = _q_clauses(q)
+    if clauses:
+        base = base.where(*clauses)
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     cap = min(200, max(1, limit))
     if pk:
@@ -228,9 +245,8 @@ def list_items(db: Session, *, kind: str = "", q: str = "", pool: str = "",
             .join(Pool, Pool.id == PoolItem.pool_id)
         if kk:
             sub = sub.where(Pool.kind == kk)
-        if ql:
-            sub = sub.where(func.lower(PoolItem.label).contains(ql)
-                            | func.lower(PoolItem.tags).contains(ql))
+        if clauses:
+            sub = sub.where(*clauses)
         ranked = sub.subquery()
         # 大池先上：按字母序取前 10 池的话，看到的全是 DanbooruTAG/attire_*，
         # 用户真正在用的「组合预设/服装-…」「人物-衣服」反而排不进来。
