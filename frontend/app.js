@@ -40,14 +40,6 @@ async function refreshBase() {
   updateStatus();
 }
 
-async function refreshStatusOnly() {
-  try {
-    state.comfy = await api.get('/api/comfy/status');
-    state.config = await api.get('/api/config');
-    updateStatus();
-  } catch (_) { /* 状态灯静默 */ }
-}
-
 function onKeydown(e) {
   const t = e.target;
   if (!t.dataset) return;

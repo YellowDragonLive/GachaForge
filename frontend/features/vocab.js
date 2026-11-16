@@ -111,25 +111,16 @@ export function vocabKeydown(t, e) {
 // ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
 export const actions = {
   'vocab-pick': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        vocabAddWord(btn.dataset.scope, btn.dataset.uid, btn.dataset.en);
-        done(`已加入「${btn.dataset.en}」`);
-
-      }
+    vocabAddWord(btn.dataset.scope, btn.dataset.uid, btn.dataset.en);
+    done(`已加入「${btn.dataset.en}」`);
   },
   'vocab-del': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const g = vocabTarget(btn.dataset.scope, btn.dataset.uid);
-        if (g) {
-          const words = String(g.extra || '').split(',').map((x) => x.trim()).filter(Boolean);
-          words.splice(Number(btn.dataset.i), 1);
-          g.extra = words.join(', ');
-          await refresh('draw');
-        }
-
-      }
-      // --- 过滤构造器：三种输入方式共用一条表达式，全程点选 ---
+    const g = vocabTarget(btn.dataset.scope, btn.dataset.uid);
+    if (g) {
+      const words = String(g.extra || '').split(',').map((x) => x.trim()).filter(Boolean);
+      words.splice(Number(btn.dataset.i), 1);
+      g.extra = words.join(', ');
+      await refresh('draw');
+    }
   },
 };

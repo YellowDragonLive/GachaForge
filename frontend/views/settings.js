@@ -3,7 +3,7 @@ import { esc } from '../detail.js';
 import { persistForm } from '../state.js';
 import { state } from '../store.js';
 import { loraOptionsHtml, loraRowsHtml, normalizeLoras, quickFilterHtml } from '../widgets.js';
-import { refresh } from '../core/router.js';
+import { refresh, updateStatus } from '../core/router.js';
 import { $, done, view } from '../core/ui.js';
 import { loraPickerHtml, modelExtraFields, settingsBody, settingsWorkflowHtml } from '../features/generation.js';
 
@@ -102,77 +102,72 @@ export async function renderSettings() {
     </div></div>`;
 }
 
+// 上移/下移只差一个步长：两个动作共用同一段交换逻辑，别各写一份。
+function moveLora(i, step) {
+  const j = i + step;
+  if (j < 0 || j >= state.loraDraft.length) return;
+  [state.loraDraft[i], state.loraDraft[j]] = [state.loraDraft[j], state.loraDraft[i]];
+  refreshLoraRows();
+}
+
+// 「刷新状态」用的轻量刷新：只重拉 ComfyUI 状态与配置，不动池子/配方这些重活。
+async function refreshStatusOnly() {
+  try {
+    state.comfy = await api.get('/api/comfy/status');
+    state.config = await api.get('/api/config');
+    updateStatus();
+  } catch (_) { /* 状态灯静默 */ }
+}
+
 // ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
 export const actions = {
-  'lora-add': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const name = $('#pLoraPick')?.value;
-        if (!name) throw new Error('先选一个 LoRA 文件');
-        const w = Number($('#pLoraWeight')?.value ?? 0.8);
-        state.loraDraft = normalizeLoras([...state.loraDraft, { name, weight: w }]);
-        refreshLoraRows(); done(`已添加 ${name}`);
-      }
+  'lora-add': async () => {
+    const name = $('#pLoraPick')?.value;
+    if (!name) throw new Error('先选一个 LoRA 文件');
+    const w = Number($('#pLoraWeight')?.value ?? 0.8);
+    state.loraDraft = normalizeLoras([...state.loraDraft, { name, weight: w }]);
+    refreshLoraRows(); done(`已添加 ${name}`);
   },
   'lora-del': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-state.loraDraft.splice(i, 1); refreshLoraRows();
+    const i = Number(btn.dataset.i);
+    state.loraDraft.splice(i, 1); refreshLoraRows();
   },
-  'lora-up': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const j = btn.dataset.act === 'lora-up' ? i - 1 : i + 1;
-        if (j < 0 || j >= state.loraDraft.length) return;
-        [state.loraDraft[i], state.loraDraft[j]] = [state.loraDraft[j], state.loraDraft[i]];
-        refreshLoraRows();
-      }
+  'lora-up': async (btn) => { moveLora(Number(btn.dataset.i), -1); },
+  'lora-down': async (btn) => { moveLora(Number(btn.dataset.i), +1); },
+  'comfy-refresh': async () => {
+    await refreshStatusOnly();
+    // 「刷新状态」显式重拉模型列表：新装的 LoRA / checkpoint 要靠它出现
+    try { state.models = await api.get('/api/comfy/models'); } catch (_) { /* 保留旧列表 */ }
+    await refresh('settings');
   },
-  'lora-down': (btn) => actions['lora-up'](btn),
-  'comfy-refresh': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        await refreshStatusOnly();
-        // 「刷新状态」显式重拉模型列表：新装的 LoRA / checkpoint 要靠它出现
-        try { state.models = await api.get('/api/comfy/models'); } catch (_) { /* 保留旧列表 */ }
-        await refresh('settings');
+  'token-save': async () => {
+    const t = $('#pToken').value.trim();
+    if (t) localStorage.setItem('gacha_token', t);
+    else localStorage.removeItem('gacha_token');
+    done(t ? '令牌已保存到本机浏览器' : '已清除令牌');
   },
-  'token-save': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const t = $('#pToken').value.trim();
-        if (t) localStorage.setItem('gacha_token', t);
-        else localStorage.removeItem('gacha_token');
-        done(t ? '令牌已保存到本机浏览器' : '已清除令牌');
-      }
+  'profile-new': async () => {
+    // 新建草稿：清空选择，表单按默认值摆好，填名字保存即新预设
+    state.settingsPid = null;
+    state.loraDraft = [];
+    await refresh('settings'); done('已切到新建：填好参数后点「保存预设」');
   },
-  'profile-new': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        // 新建草稿：清空选择，表单按默认值摆好，填名字保存即新预设
-        state.settingsPid = null;
-        state.loraDraft = [];
-        await refresh('settings'); done('已切到新建：填好参数后点「保存预设」');
+  'profile-del': async () => {
+    const pid = state.settingsPid;
+    if (!pid) return;
+    const cur = state.profiles.find((x) => x.id === pid);
+    if (!confirm(`确定删除预设「${cur?.name || pid}」？被配方引用时会删除失败。`)) return;
+    await api.del(`/api/gen-profiles/${pid}`);
+    state.profiles = await api.get('/api/gen-profiles');
+    if (String(state.form.gen_profile_id) === String(pid)) state.form.gen_profile_id = '';
+    state.settingsPid = null;
+    persistForm(state);
+    done('预设已删除'); await refresh('settings');
   },
-  'profile-del': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const pid = state.settingsPid;
-        if (!pid) return;
-        const cur = state.profiles.find((x) => x.id === pid);
-        if (!confirm(`确定删除预设「${cur?.name || pid}」？被配方引用时会删除失败。`)) return;
-        await api.del(`/api/gen-profiles/${pid}`);
-        state.profiles = await api.get('/api/gen-profiles');
-        if (String(state.form.gen_profile_id) === String(pid)) state.form.gen_profile_id = '';
-        state.settingsPid = null;
-        persistForm(state);
-        done('预设已删除'); await refresh('settings');
-      }
-  },
-  'profile-save': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const saved = await api.post('/api/gen-profiles', settingsBody(state));
-        state.settingsPid = saved.id;
-        state.profiles = await api.get('/api/gen-profiles');
-        done(`预设已保存：${saved.name}`); await refresh('settings');
-      }
+  'profile-save': async () => {
+    const saved = await api.post('/api/gen-profiles', settingsBody(state));
+    state.settingsPid = saved.id;
+    state.profiles = await api.get('/api/gen-profiles');
+    done(`预设已保存：${saved.name}`); await refresh('settings');
   },
 };

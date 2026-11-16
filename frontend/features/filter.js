@@ -188,54 +188,41 @@ export function filterTagQInput(t) {
 // ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
 export const actions = {
   'filter-mode': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-await setFilterMode(btn.dataset.v);
+    await setFilterMode(btn.dataset.v);
   },
-  'filter-add': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        // 搜索框里手打的优先于下拉选中项；加完清空并把候选恢复成热门。
-        const tag = $('#dFilterTagQ')?.value.trim() || $('#dFilterTag')?.value;
-        if (!tag) throw new Error('先选一个 tag，或点下方热门 tag');
-        setFilterSpec(addFilter(state.form.filter, state.filterPool, tag));
-        const q = $('#dFilterTagQ'); if (q) q.value = '';
-        state.filterTagQ = '';
-        loadTagOptions(state.filterPool, '');
-        done(`已添加过滤：${state.filterPool ? state.filterPool + ':' : ''}${tag}`);
-      }
+  'filter-add': async () => {
+    // 搜索框里手打的优先于下拉选中项；加完清空并把候选恢复成热门。
+    const tag = $('#dFilterTagQ')?.value.trim() || $('#dFilterTag')?.value;
+    if (!tag) throw new Error('先选一个 tag，或点下方热门 tag');
+    setFilterSpec(addFilter(state.form.filter, state.filterPool, tag));
+    const q = $('#dFilterTagQ'); if (q) q.value = '';
+    state.filterTagQ = '';
+    loadTagOptions(state.filterPool, '');
+    done(`已添加过滤：${state.filterPool ? state.filterPool + ':' : ''}${tag}`);
   },
   'filter-hot': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        setFilterSpec(addFilter(state.form.filter, state.filterPool, btn.dataset.v));
+    setFilterSpec(addFilter(state.form.filter, state.filterPool, btn.dataset.v));
   },
   'filter-del': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        setFilterSpec(removeFilter(state.form.filter, i));
+    const i = Number(btn.dataset.i);
+    setFilterSpec(removeFilter(state.form.filter, i));
   },
-  'filter-clear': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        setFilterSpec(''); syncConceptPanel();
+  'filter-clear': async () => {
+    setFilterSpec(''); syncConceptPanel();
   },
-  'fix-recipe': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-await addFilterToRecipe();
-      // --- 通用概念缩略图：点图即选，沿用已有过滤构造器 ---
+  'fix-recipe': async () => {
+    await addFilterToRecipe();
   },
   'feel-chip': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const el = $('#semanticQ'); if (el) el.value = btn.dataset.v;
-        await loadSemantics(btn.dataset.v);
-      }
+    const el = $('#semanticQ'); if (el) el.value = btn.dataset.v;
+    await loadSemantics(btn.dataset.v);
   },
-  'semantic-go': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        await loadSemantics($('#semanticQ')?.value.trim() || '');
+  'semantic-go': async () => {
+    await loadSemantics($('#semanticQ')?.value.trim() || '');
   },
   'semantic-pick': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        setFilterSpec(addFilter(state.form.filter, '画师', btn.dataset.v));
-        syncConceptPanel();
-        done(`已按画师过滤：${btn.dataset.v}`);
+    setFilterSpec(addFilter(state.form.filter, '画师', btn.dataset.v));
+    syncConceptPanel();
+    done(`已按画师过滤：${btn.dataset.v}`);
   },
 };

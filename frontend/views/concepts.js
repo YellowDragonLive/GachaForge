@@ -108,34 +108,26 @@ export async function conceptMore() {
 // ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
 export const actions = {
   'concept-open': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        // 不可过滤的概念卡：点整卡进详情页（概念名本就有 #/concept/<key> 链接，
-        // 之前这里缺 case，点了整卡没反应——靠链接侥幸掩盖了）。
-        location.hash = '#/concept/' + encodeURIComponent(btn.dataset.key || '');
-
+    // 不可过滤的概念卡：点整卡进详情页（概念名本就有 #/concept/<key> 链接，
+    // 之前这里缺 case，点了整卡没反应——靠链接侥幸掩盖了）。
+    location.hash = '#/concept/' + encodeURIComponent(btn.dataset.key || '');
   },
   'concept-pick': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        setFilterSpec(addFilter(state.form.filter, btn.dataset.pool || '', btn.dataset.v));
-        syncConceptPanel();
-        done(`已加入过滤：${(btn.dataset.pool ? btn.dataset.pool + ':' : '') + btn.dataset.v}`);
-
+    setFilterSpec(addFilter(state.form.filter, btn.dataset.pool || '', btn.dataset.v));
+    syncConceptPanel();
+    done(`已加入过滤：${(btn.dataset.pool ? btn.dataset.pool + ':' : '') + btn.dataset.v}`);
   },
   'concept-kind': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        state.concepts.kind = btn.dataset.v || '';
-        syncConceptPanel(); await loadConcepts();
+    state.concepts.kind = btn.dataset.v || '';
+    syncConceptPanel(); await loadConcepts();
   },
-  'concept-refresh': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        await loadConcepts(); done('概念墙已刷新');
+  'concept-refresh': async () => {
+    await loadConcepts(); done('概念墙已刷新');
   },
-  'concept-back': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        location.hash = '#draw';
+  'concept-back': async () => {
+    location.hash = '#draw';
   },
-  'concept-more': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-await conceptMore();
+  'concept-more': async () => {
+    await conceptMore();
   },
 };

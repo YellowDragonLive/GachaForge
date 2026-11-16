@@ -36,20 +36,18 @@ export const refreshJobsBody = () => { const el = $('#jobsBody'); if (el) el.inn
 
 // ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
 export const actions = {
-  'job-refresh': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-await refresh('jobs');
+  'job-refresh': async () => {
+    await refresh('jobs');
   },
   'job-cancel': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-await api.post(`/api/jobs/${id}/cancel`, {}); await refresh('jobs');
+    const id = Number(btn.dataset.id);
+    await api.post(`/api/jobs/${id}/cancel`, {}); await refresh('jobs');
   },
   'job-retry': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-await api.post(`/api/jobs/${id}/retry`, {}); await refresh('jobs');
+    const id = Number(btn.dataset.id);
+    await api.post(`/api/jobs/${id}/retry`, {}); await refresh('jobs');
   },
-  'goto-gallery': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-location.hash = '#gallery';
+  'goto-gallery': async () => {
+    location.hash = '#gallery';
   },
 };

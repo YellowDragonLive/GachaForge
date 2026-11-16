@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { cut, esc } from '../detail.js';
 import { state } from '../store.js';
 import { matchQuery, poolSearchText, quickFilterHtml } from '../widgets.js';
+import { refresh } from '../core/router.js';
 import { $, done, view } from '../core/ui.js';
 
 // 卡池管理视图：池开关、条目浏览、导入与回滚。
@@ -55,34 +56,30 @@ export async function renderPools() {
 // ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
 export const actions = {
   'pool-toggle': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        await api.put(`/api/pools/${id}`, { enabled: btn.dataset.on === '1' });
-        state.pools = await api.get('/api/pools'); await refresh('pools');
+    const id = Number(btn.dataset.id);
+    await api.put(`/api/pools/${id}`, { enabled: btn.dataset.on === '1' });
+    state.pools = await api.get('/api/pools'); await refresh('pools');
   },
   'pool-items': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-state.openPool = id; await refresh('pools');
+    const id = Number(btn.dataset.id);
+    state.openPool = id; await refresh('pools');
   },
-  'pool-close': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-state.openPool = null; await refresh('pools');
+  'pool-close': async () => {
+    state.openPool = null; await refresh('pools');
   },
-  'import': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const path = $('#importPath').value.trim();
-        if (!path) throw new Error('请填写导入路径');
-        const r = await api.post('/api/pools/import', { path });
-        state.pools = await api.get('/api/pools');
-        state.batches = await api.get('/api/pools/batches');
-        done(`导入完成：${r.pools} 池 / ${r.items} 条`); await refresh('pools');
-      }
+  'import': async () => {
+    const path = $('#importPath').value.trim();
+    if (!path) throw new Error('请填写导入路径');
+    const r = await api.post('/api/pools/import', { path });
+    state.pools = await api.get('/api/pools');
+    state.batches = await api.get('/api/pools/batches');
+    done(`导入完成：${r.pools} 池 / ${r.items} 条`); await refresh('pools');
   },
   'rollback': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        await api.del(`/api/pools/batches/${id}`);
-        state.pools = await api.get('/api/pools');
-        state.batches = await api.get('/api/pools/batches');
-        done('批次已回滚'); await refresh('pools');
+    const id = Number(btn.dataset.id);
+    await api.del(`/api/pools/batches/${id}`);
+    state.pools = await api.get('/api/pools');
+    state.batches = await api.get('/api/pools/batches');
+    done('批次已回滚'); await refresh('pools');
   },
 };

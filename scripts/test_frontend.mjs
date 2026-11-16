@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { unresolvedCalls } from './frontend_refs.mjs';
 
 // 拆模块后「接线断言」不再指向单一文件：把 frontend 下所有 .js 拼起来当一份前端源码查。
 // 断言语义不变（某段 HTML / data-act 必须有对应实现），只是不再关心它写在哪个文件里。
@@ -901,6 +902,18 @@ const cases = [
     const dead = [...handled].filter((x) => !emitted.has(x));
     assert.deepEqual(dead, [], `已注册但没有任何模板产出的死动作: ${dead.join(', ')}`);
     assert.ok(handled.has('concept-open'), '不可过滤概念卡点的 concept-open 必须有 handler');
+  }],
+  ['引用契约：模块里调用到的每个函数都有来源（防漏 import）', () => {
+    // 拆文件最容易犯的错：调用搬进新模块、import 留在旧文件。node --check 看不出，
+    // 只有真点到那个按钮才炸（views/draw.js 曾丢掉 restoreFormState 导致整个 boot 失败）。
+    const problems = [];
+    for (const f of jsFiles) {
+      const miss = unresolvedCalls(readFileSync(f, 'utf8'));
+      if (miss.length) {
+        problems.push(`${f.split(/[\\/]/).pop()}: ${miss.map((m) => `${m.name}×${m.count}`).join(', ')}`);
+      }
+    }
+    assert.deepEqual(problems, [], `调用了但没有来源的函数：\n  ${problems.join('\n  ')}`);
   }],
 ];
 

@@ -413,43 +413,34 @@ export async function submitJobs(ids, opts = {}) {
 
 // ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
 export const actions = {
-  'draw-and-gen': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-await doDraw({ generate: true });
+  'draw-and-gen': async () => {
+    await doDraw({ generate: true });
   },
-  'draw': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-await doDraw();
-      // --- 装配面板：场景 / 人物。人数 = 人物卡张数 ---
+  'draw': async () => {
+    await doDraw();
   },
-  'tune-open': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-await openTuning();
+  'tune-open': async () => {
+    await openTuning();
   },
-  'tune-save': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-await saveTuning();
+  'tune-save': async () => {
+    await saveTuning();
   },
-  'draw-clear': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        state.draws = []; state.session = null; state.warnings = [];
-        sessionStorage.setItem(LAST_SESSION_KEY, '0');
-        await refresh('draw');
+  'draw-clear': async () => {
+    state.draws = []; state.session = null; state.warnings = [];
+    sessionStorage.setItem(LAST_SESSION_KEY, '0');
+    await refresh('draw');
   },
-  'gen-all': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-await submitJobs(state.draws.map((d) => d.id));
+  'gen-all': async () => {
+    await submitJobs(state.draws.map((d) => d.id));
   },
   'gen-one': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-await submitJobs([id]);
+    const id = Number(btn.dataset.id);
+    await submitJobs([id]);
   },
   'copy': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const el = $(`#prompt_${id}`);
-        await navigator.clipboard.writeText(el.value);
-        done('已复制 prompt');
-      }
+    const id = Number(btn.dataset.id);
+    const el = $(`#prompt_${id}`);
+    await navigator.clipboard.writeText(el.value);
+    done('已复制 prompt');
   },
 };

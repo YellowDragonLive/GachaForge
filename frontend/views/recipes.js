@@ -89,82 +89,66 @@ export function readRecipeForm() {
   };
 }
 
+// 上移/下移只差一个步长：两个动作共用同一段交换逻辑，别各写一份。
+function moveSlot(i, step) {
+  const j = i + step;
+  if (j < 0 || j >= state.slotsDraft.length) return;
+  [state.slotsDraft[i], state.slotsDraft[j]] = [state.slotsDraft[j], state.slotsDraft[i]];
+  refreshSlots();
+}
+
 // ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
 export const actions = {
-  'recipe-new': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-state.editingRecipe = null; await refresh('recipes');
+  'recipe-new': async () => {
+    state.editingRecipe = null; await refresh('recipes');
   },
   'recipe-select': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        state.editingRecipe = state.recipes.find((r) => r.id === id) || null;
-        await refresh('recipes');
+    const id = Number(btn.dataset.id);
+    state.editingRecipe = state.recipes.find((r) => r.id === id) || null;
+    await refresh('recipes');
   },
-  'recipe-save': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const body = readRecipeForm();
-        if (!body.name) throw new Error('配方名不能为空');
-        const url = state.editingRecipe ? `/api/recipes/${state.editingRecipe.id}` : '/api/recipes';
-        await (state.editingRecipe ? api.put(url, body) : api.post(url, body));
-        state.recipes = await api.get('/api/recipes');
-        state.editingRecipe = null; done('配方已保存'); await refresh('recipes');
-      }
+  'recipe-save': async () => {
+    const body = readRecipeForm();
+    if (!body.name) throw new Error('配方名不能为空');
+    const url = state.editingRecipe ? `/api/recipes/${state.editingRecipe.id}` : '/api/recipes';
+    await (state.editingRecipe ? api.put(url, body) : api.post(url, body));
+    state.recipes = await api.get('/api/recipes');
+    state.editingRecipe = null; done('配方已保存'); await refresh('recipes');
   },
   'recipe-del': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        await api.del(`/api/recipes/${id}`);
-        state.recipes = await api.get('/api/recipes');
-        state.editingRecipe = null; done('配方已删除'); await refresh('recipes');
+    const id = Number(btn.dataset.id);
+    await api.del(`/api/recipes/${id}`);
+    state.recipes = await api.get('/api/recipes');
+    state.editingRecipe = null; done('配方已删除'); await refresh('recipes');
   },
   'recipe-preview': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const body = readRecipeForm();
-        const res = await api.post('/api/recipes/preview?pulls=3', body.definition);
-        $('#recipePreview').innerHTML = '<h3>预览</h3>' + res.map((r, i) =>
-          `<div class="chip" style="display:block;margin-bottom:6px">[${i + 1}] ${esc(cut(r.prompt, 220))}</div>`).join('');
-
-      }
-      // --- 配方槽位：可视化表格，局部刷新避免清掉未保存的其它字段 ---
+    const i = Number(btn.dataset.i);
+    const body = readRecipeForm();
+    const res = await api.post('/api/recipes/preview?pulls=3', body.definition);
+    $('#recipePreview').innerHTML = '<h3>预览</h3>' + res.map((r, i) =>
+      `<div class="chip" style="display:block;margin-bottom:6px">[${i + 1}] ${esc(cut(r.prompt, 220))}</div>`).join('');
   },
-  'slot-add': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-        state.slotsDraft.push({ pool: '', count: 1, weight: 1, filter: '' });
-        refreshSlots();
+  'slot-add': async () => {
+    state.slotsDraft.push({ pool: '', count: 1, weight: 1, filter: '' });
+    refreshSlots();
   },
   'slot-del': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-state.slotsDraft.splice(i, 1); refreshSlots();
+    const i = Number(btn.dataset.i);
+    state.slotsDraft.splice(i, 1); refreshSlots();
   },
-  'slot-up': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const j = btn.dataset.act === 'slot-up' ? i - 1 : i + 1;
-        if (j < 0 || j >= state.slotsDraft.length) return;
-        [state.slotsDraft[i], state.slotsDraft[j]] = [state.slotsDraft[j], state.slotsDraft[i]];
-        refreshSlots();
-      }
+  'slot-up': async (btn) => { moveSlot(Number(btn.dataset.i), -1); },
+  'slot-down': async (btn) => { moveSlot(Number(btn.dataset.i), +1); },
+  'slot-apply-json': async () => {
+    const parsed = JSON.parse($('#rSlots').value || '[]');
+    if (!Array.isArray(parsed)) throw new Error('槽位必须是数组');
+    state.slotsDraft = normalizeSlots(parsed);
+    refreshSlots(); done(`已读取 ${state.slotsDraft.length} 个槽位`);
   },
-  'slot-down': (btn) => actions['slot-up'](btn),
-  'slot-apply-json': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const parsed = JSON.parse($('#rSlots').value || '[]');
-        if (!Array.isArray(parsed)) throw new Error('槽位必须是数组');
-        state.slotsDraft = normalizeSlots(parsed);
-        refreshSlots(); done(`已读取 ${state.slotsDraft.length} 个槽位`);
-      }
-  },
-  'tpl-insert': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const pool = $('#rTplPool')?.value;
-        if (!pool) throw new Error('先选一个卡池');
-        const ta = $('#rTpl');
-        ta.value = (ta.value ? ta.value.trimEnd() + ', ' : '') + `__${pool}__`;
-        done(`已插入 __${pool}__`);
-      }
-      // --- LoRA：下拉点选 + 权重行 ---
+  'tpl-insert': async () => {
+    const pool = $('#rTplPool')?.value;
+    if (!pool) throw new Error('先选一个卡池');
+    const ta = $('#rTpl');
+    ta.value = (ta.value ? ta.value.trimEnd() + ', ' : '') + `__${pool}__`;
+    done(`已插入 __${pool}__`);
   },
 };

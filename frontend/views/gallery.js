@@ -70,35 +70,27 @@ export function openLightbox(id) {
 // ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
 export const actions = {
   'img-open': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-openLightbox(id);
+    const id = Number(btn.dataset.id);
+    openLightbox(id);
   },
   'img-rerun': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const im = state.images.find((x) => x.id === id);
-        await api.post('/api/jobs', { draw_ids: [im.meta.draw_id], force: true });
-        done('已用同一抽卡结果重新提交任务'); location.hash = '#jobs';
-      }
+    const id = Number(btn.dataset.id);
+    const im = state.images.find((x) => x.id === id);
+    await api.post('/api/jobs', { draw_ids: [im.meta.draw_id], force: true });
+    done('已用同一抽卡结果重新提交任务'); location.hash = '#jobs';
   },
-  'gallery-scan': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const path = $('#galleryDir').value.trim();
-        if (!path) throw new Error('请填写图片目录');
-        const r = await api.post('/api/images/register-dir', { path });
-        done(`注册完成：新增 ${r.added} 张`); await refresh('gallery');
-      }
+  'gallery-scan': async () => {
+    const path = $('#galleryDir').value.trim();
+    if (!path) throw new Error('请填写图片目录');
+    const r = await api.post('/api/images/register-dir', { path });
+    done(`注册完成：新增 ${r.added} 张`); await refresh('gallery');
   },
-  'gallery-export': async (btn) => {
-    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
-{
-        const ids = state.images.map((x) => x.id).join(',');
-        const data = await api.get('/api/images/export?ids=' + encodeURIComponent(ids));
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob); a.download = 'gacha_gallery_meta.json'; a.click();
-        URL.revokeObjectURL(a.href); done('元数据已导出');
-      }
+  'gallery-export': async () => {
+    const ids = state.images.map((x) => x.id).join(',');
+    const data = await api.get('/api/images/export?ids=' + encodeURIComponent(ids));
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'gacha_gallery_meta.json'; a.click();
+    URL.revokeObjectURL(a.href); done('元数据已导出');
   },
 };
