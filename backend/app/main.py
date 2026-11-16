@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import Scope
 
-from .api import concepts, draws, images, jobs, pools, recipes, semantics, system
+from .api import concepts, draws, images, jobs, pools, recipes, semantics, system, vocab
 from .config import get_settings
 from .db import SessionLocal, init_db
 from .errors import AppError, fail_payload
@@ -99,7 +99,7 @@ def create_app() -> FastAPI:
         err = AppError("服务内部错误，请查看日志", code="internal_error", status=500)
         return JSONResponse(fail_payload(err, rid), status_code=500)
 
-    for module in (system, pools, recipes, draws, jobs, images, semantics, concepts):
+    for module in (system, pools, recipes, draws, jobs, images, semantics, concepts, vocab):
         app.include_router(module.router)
 
     # 前端是零框架静态页，由同一个进程托管，不需要第二个服务。

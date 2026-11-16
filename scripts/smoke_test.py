@@ -331,6 +331,21 @@ def main() -> int:
                   "slot" in x and isinstance(x.get("tags"), list) for x in free_detail),
               f"{len(free_detail)} 个槽位")
 
+        # 抽卡台底部的「任意值」输入：装配编译成一个 pool='任意值' + free 的槽位。
+        # 它不查池子、不吃过滤，池里不存在的词也必须原样进 prompt。
+        extra = {"fixed_head": "masterpiece, best quality", "count_tags": "1girl",
+                 "slots": [{"pool": "任意值", "count": 1, "weight": 1,
+                            "free": "silver hair, from behind"}]}
+        extra_s = c.post("/api/draw-sessions", json={
+            "definition": extra, "pulls": 1, "seed": 3, "filter": "角色:fate"}).json()["data"]
+        extra_prompt = extra_s["draws"][0]["prompt"]
+        check("任意值槽位原样进 prompt（不查池、不吃过滤）",
+              "silver hair" in extra_prompt and "from behind" in extra_prompt,
+              extra_prompt[:90])
+        check("任意值槽位在明细里标 free",
+              any(x.get("free") for x in extra_s["draws"][0]["detail"]),
+              f"{len(extra_s['draws'][0]['detail'])} 个槽位")
+
         # 过滤语义：裸关键字作用于全部卡池，会把配方槽位静默清空；
         # 按池语法、大小写不敏感、告警与空槽位标记都必须成立。
         inline = {"fixed_head": "masterpiece, best quality", "template": "",
@@ -578,6 +593,28 @@ def main() -> int:
         check("概念与语义端点已注册",
               all(p in paths for p in ("/api/concepts/wall", "/api/concepts/cover",
                                       "/api/concepts/images", "/api/semantics/suggest")))
+
+        print("-- 意群双语词表（本地 map，补全与写入英文） --")
+        vt = c.get("/api/vocab/status").json()["data"]
+        check("词表已就绪（本地词表可重建）",
+              vt.get("ready") is True and vt.get("count", 0) >= 30000,
+              f"{vt.get('count')} 条")
+        zh = c.get("/api/vocab/suggest", params={"q": "黑发", "limit": 5}).json()["data"]
+        check("中文输入 → 中文候选、双语显示",
+              zh["lang"] == "zh" and len(zh["items"]) >= 1
+              and any(x["en"] == "black hair" and "黑发" in x["display"]
+                      for x in zh["items"]),
+              str([x["display"] for x in zh["items"][:2]]))
+        en = c.get("/api/vocab/suggest", params={"q": "silver h", "limit": 5}).json()["data"]
+        check("英文输入 → 英文候选、双语显示",
+              en["lang"] == "en" and any("silver hair" in x["en"] and x["zh"]
+                                          for x in en["items"]),
+              str([x["display"] for x in en["items"][:2]]))
+        tr = c.get("/api/vocab/translate", params={"text": "黑发, 长发"}).json()["data"]
+        check("整段中文 → 英文 tag（写进 prompt 的永远是英文）",
+              tr["en"] == "black hair, long hair" and not tr["missing"])
+        check("词表端点已注册",
+              all(p in paths for p in ("/api/vocab/suggest", "/api/vocab/translate")))
 
         print("-- 离线依赖（零下载约定） --")
         req = (ROOT / "requirements.txt").read_text(encoding="utf-8")
