@@ -4,8 +4,11 @@ import { esc, cut, slotChips } from './detail.js';
 import { SAMPLERS, SCHEDULERS, profileDraft, tuningWorkflowHtml,
   settingsWorkflowHtml, modelExtraFields, tuningBody, settingsBody,
   loraPickerHtml } from './features/generation.js';
-import { LAST_SESSION_KEY, FORM_KEY, ASM_KEY, createState, persistForm,
+import { LAST_SESSION_KEY, FORM_KEY, ASM_KEY, persistForm,
   restoreForm as restoreFormState, debounce } from './state.js';
+import { state } from './store.js';
+import { $, num, view, toast, fail, done } from './core/ui.js';
+import { setNav, updateStatus, onRoute, registerView } from './core/router.js';
 import {
   parseFilterSpec, addFilter, removeFilter, missingFilterSlots,
   filterChipsHtml, hotTagChipsHtml,
@@ -21,40 +24,7 @@ import {
   queryWords, matchQuery, quickFilterHtml,
 } from './widgets.js';
 
-const $ = (sel, root = document) => root.querySelector(sel);
-const view = $('#view');
-const num = (v, d) => (v === '' || v === undefined || v === null ? d : Number(v));
 let asmTimer = null;
-
-const state = createState();
-let toastTimer = null;
-function toast(msg, kind = '') {
-  const el = $('#toast');
-  el.textContent = msg;
-  el.className = 'toast ' + kind;
-  el.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 3600);
-}
-const fail = (e) => toast(friendlyError(e), 'err');
-const done = (msg) => toast(msg, 'ok');
-
-function setNav(v) {
-  state.view = v;
-  document.querySelectorAll('#nav button').forEach((b) =>
-    b.classList.toggle('active', b.dataset.view === v));
-}
-
-function updateStatus() {
-  const dot = $('#comfyDot'), text = $('#comfyText');
-  if (!state.comfy.online) {
-    dot.className = 'dot off'; text.textContent = 'ComfyUI 离线';
-  } else if (state.comfy.mock) {
-    dot.className = 'dot mock'; text.textContent = 'mock 模式（占位图）';
-  } else {
-    dot.className = 'dot on'; text.textContent = 'ComfyUI 在线';
-  }
-}
 
 async function refreshBase() {
   const [recipes, profiles, pools, batches, config, comfy, jobs] = await Promise.all([
@@ -2150,40 +2120,6 @@ async function onClick(e) {
   } catch (err) { fail(err); }
 }
 
-async function onRoute() {
-  const raw = (location.hash.slice(1) || 'draw').replace(/^\//, '');
-  if (raw.startsWith('concept/')) {
-    setNav('draw');
-    state.view = 'concept';
-    try {
-      await renderConceptPage(decodeURIComponent(raw.slice(8)));
-    } catch (err) {
-      fail(err);
-      view.innerHTML = `<div class="panel err-text">概念页加载失败：${esc(friendlyError(err))}
-        <button class="btn small" data-act="concept-back">返回抽卡台</button></div>`;
-    }
-    return;
-  }
-  let v = raw;
-  if (!['draw', 'pools', 'recipes', 'jobs', 'gallery', 'settings'].includes(v)) v = 'draw';
-  setNav(v);
-  state.view = v;
-  try {
-    if (v === 'draw') await renderDraw();
-    else if (v === 'pools') await renderPools();
-    else if (v === 'recipes') await renderRecipes();
-    else if (v === 'jobs') await renderJobs();
-    else if (v === 'gallery') await renderGallery();
-    else await renderSettings();
-  } catch (err) {
-    // 不整页替换：保留已有内容，只在顶部插入错误条，避免一条脏数据把界面清空
-    fail(err);
-    const bar = `<div class="panel err-text">页面加载失败：${esc(friendlyError(err))}
-      <button class="btn small" data-act="view-retry">重试</button></div>`;
-    view.innerHTML = view.innerHTML.trim() ? bar + view.innerHTML : bar;
-  }
-}
-
 function onInput(e) {
   const t = e.target;
   if (t.dataset && t.dataset.qf) { onQuickFilterInput(t); return; }
@@ -2389,6 +2325,16 @@ async function boot() {
       请确认 start.bat 正在运行，并刷新页面重试。</div>`;
   }
 }
+
+// 视图注册：路由只认名字，不认函数定义在哪个文件。
+// 拆域的每一步只是把这里的某一行搬到对应模块里，路由层不用改。
+registerView('draw', renderDraw);
+registerView('pools', renderPools);
+registerView('recipes', renderRecipes);
+registerView('jobs', renderJobs);
+registerView('gallery', renderGallery);
+registerView('settings', renderSettings);
+registerView('concept', renderConceptPage);
 
 boot();
 
