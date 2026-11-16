@@ -13,12 +13,12 @@ import random
 import re
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..core import recipes as recipe_core
 from ..core.pools import apply_filter_spec, build_prompt, draw_pull, pick_pools
-from ..errors import ConflictError, NotFoundError
+from ..errors import BadRequestError, ConflictError, NotFoundError
 from ..models import (Draw, DrawSession, DrawSlot, DrawSlotTag, GenProfile,
                       GenerationJob, Image, ImageAsset, Pool, Recipe,
                       SessionLora, SessionProfile, SessionRecipe,
@@ -112,11 +112,24 @@ def ensure_default_profile(db: Session) -> GenProfile:
 
 
 def upsert_profile(db: Session, data: dict) -> dict:
-    name = data["name"].strip()
-    row = db.scalar(select(GenProfile).where(GenProfile.name == name))
+    name = str(data["name"]).strip()
+    if not name:
+        raise BadRequestError("预设名不能为空")
+    row = db.get(GenProfile, data["id"]) if data.get("id") else None
+    if row is None:
+        # 无 id：按名字找（同名=就地更新）；带 id 但找不到：报错而不是静默新建
+        row = db.scalar(select(GenProfile).where(GenProfile.name == name))
+        if row is None and data.get("id"):
+            raise NotFoundError(f"预设 #{data['id']} 不存在")
     if row is None:
         row = GenProfile(name=name)
         db.add(row)
+    elif data.get("id") is None or row.id == data["id"]:
+        clash = db.scalar(select(GenProfile).where(
+            GenProfile.name == name, GenProfile.id != row.id))
+        if clash:
+            raise ConflictError(f"已有同名预设「{name}」(# {clash.id})，换个名字")
+    row.name = name
     for key in ("checkpoint", "steps", "cfg", "sampler", "scheduler", "width",
                 "height", "negative", "workflow"):
         if key in data:
@@ -125,6 +138,21 @@ def upsert_profile(db: Session, data: dict) -> dict:
     db.commit()
     db.refresh(row)
     return profile_out(row)
+
+
+def delete_profile(db: Session, profile_id: int) -> dict:
+    row = db.get(GenProfile, profile_id)
+    if row is None:
+        raise NotFoundError(f"预设 #{profile_id} 不存在")
+    used = db.scalar(select(func.count()).select_from(Recipe)
+                     .where(Recipe.gen_profile_id == profile_id)) or 0
+    if used:
+        raise ConflictError(
+            f"预设「{row.name}」被 {used} 个配方引用，先去配方里换掉它再删")
+    name = row.name
+    db.delete(row)
+    db.commit()
+    return {"deleted": profile_id, "name": name}
 
 
 def resolve_profile(db: Session, profile_id: int | None) -> dict:

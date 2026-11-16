@@ -102,6 +102,29 @@ def expand_template(tpl: str, all_pools: list[PoolData], rng) -> str:
     return out.strip(" ,")
 
 
+def dedupe_parts(parts: list[str]) -> list[str]:
+    """按 tag 去重（保序、大小写不敏感），整段里含逗号的先拆。
+
+    同一个 tag 从两个槽位抽到会写两遍（实测「1girl, 25-ji miku, 25-ji miku」）：
+    多出来的那遍不改画面，只让 prompt 变脏、还占 token。人数与质量词尤其容易撞。
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for chunk in parts:
+        keeps: list[str] = []
+        for tag in (t.strip() for t in str(chunk or "").split(",")):
+            if not tag:
+                continue
+            key = tag.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            keeps.append(tag)
+        if keeps:
+            out.append(", ".join(keeps))
+    return out
+
+
 def run_recipe(recipe: dict[str, Any], all_pools: list[PoolData], rng) -> dict:
     """执行一次配方 → {prompt, detail}。detail 记录每个槽位抽到了什么。"""
     parts: list[str] = []
@@ -166,7 +189,7 @@ def run_recipe(recipe: dict[str, Any], all_pools: list[PoolData], rng) -> dict:
     if tail:
         parts.append(tail)
         detail.append({"slot": "fixed_tail", "tags": [tail]})
-    prompt = ", ".join(p for p in parts if p)
+    prompt = ", ".join(dedupe_parts([p for p in parts if p]))
     prompt = re.sub(r"(,\s*){2,}", ", ", prompt).strip(" ,")
     return {"prompt": prompt, "detail": detail}
 

@@ -49,3 +49,8 @@ def list_profiles(db: Session = Depends(get_db)):
 @router.post("/gen-profiles")
 def upsert_profile(body: GenProfileIn, db: Session = Depends(get_db)):
     return ok(svc.upsert_profile(db, body.model_dump()))
+
+
+@router.delete("/gen-profiles/{profile_id}")
+def delete_profile(profile_id: int, db: Session = Depends(get_db)):
+    return ok(svc.delete_profile(db, profile_id))

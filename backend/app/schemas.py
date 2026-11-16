@@ -92,6 +92,9 @@ class RecipeOut(_Out):
 
 
 class GenProfileIn(BaseModel):
+    # 带 id = 就地更新（允许改名）；不带 = 按名字 upsert（同名即更新，异名即新建）。
+    # 之前没有 id，改预设名会被当成新预设，库里越积越多。
+    id: int | None = None
     name: str = Field(min_length=1, max_length=160)
     checkpoint: str = ""
     loras: list[dict[str, Any]] = []
