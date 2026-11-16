@@ -21,7 +21,7 @@ const view = $('#view');
 const num = (v, d) => (v === '' || v === undefined || v === null ? d : Number(v));
 const LAST_SESSION_KEY = 'gacha_last_session';
 const FORM_KEY = 'gacha_draw_form';
-const ASM_KEY = 'gacha_assembly';
+const ASM_KEY = 'gacha_assembly_v2';   // v2：默认全关。旧 key 里的「默认随机」不能复活
 let asmTimer = null;
 
 const state = {
@@ -35,7 +35,8 @@ const state = {
   // 设置页正在编辑的预设 id：null = 新建草稿。之前写死 profiles[0]，其余预设永远改不了
   settingsPid: null,
   gallery: { favorite: '', origin: '', min_rating: 0 },
-  // 装配面板：人数 = 人物卡片张数，0 张即无人。默认单人全随机，和原来的「抽一张」等价。
+  // 装配面板：人数 = 人物卡片张数，0 张即无人。所有格子默认关闭（白纸起步），
+  // 用户主动打开哪格，哪格才进 prompt。
   assembly: {
     enabled: true,          // false = 改用配方模式（保留原有能力）
     tab: 'people',          // 'people' | 'scene'
@@ -170,6 +171,9 @@ function drawForm() {
         <button class="btn primary" style="flex:1" data-act="draw-and-gen">抽卡并生图</button>
         <button class="btn" data-act="draw">只抽卡</button>
       </div>
+      ${assemblyIsEmpty(state.assembly) ? `<p class="hint warn-text" style="margin:8px 0 0">
+        装配全是「关闭」：这一抽会${state.form.recipe_id ? '按所选配方' : '从全部卡池随机'}执行。
+        想控制内容，就打开左边任意一格（点部位 → 选条目，或点「随机」）。</p>` : ''}
       <div class="row" style="margin-top:8px">
         <button class="btn small" data-act="gen-all" ${state.draws.length ? '' : 'disabled'}>本批全部生图</button>
         ${state.draws.length ? '<button class="btn small" data-act="draw-clear">清空结果</button>' : ''}
@@ -194,8 +198,9 @@ function drawForm() {
 function asmSummaryText() {
   const a = state.assembly;
   const n = a.people.length;
-  if (!n) return '纯场景 · 无人物';
-  return `${n} 人 · ${countTagsFor(a.people)}`;
+  const base = n ? `${n} 人 · ${countTagsFor(a.people)}` : '纯场景 · 无人物';
+  // 全关是默认状态，必须写在标题上：否则「什么都没开」看起来像面板坏了
+  return assemblyIsEmpty(a) ? `${base} · 全关` : base;
 }
 
 function assemblyPanelHtml() {
@@ -297,7 +302,7 @@ function asmPersonCard(p, idx) {
 /** 一格槽位（左/右列成员、角色条、场景格共用）：点开就是这一格的条目选择器。 */
 function asmPartHtml(cfg, { label, key, uid, scope = 'person', open, side = '' }) {
   const c = cfg || { mode: 'off', pick: '', kind: '' };
-  const mode = c.mode || 'random';
+  const mode = c.mode || 'off';
   // 锁定的值有两种来源：从池里点的条目（pick）和用户手写的任意值（free）。
   // 手填值挂 is-free，格子上用不同边框区分——一眼看出「这个不是池里的东西」。
   const hand = mode === 'locked' && !c.pick && !!c.free;

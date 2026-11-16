@@ -463,12 +463,15 @@ const cases = [
     const gear = def.slots.find((s) => s.pool === '物品');
     assert.equal(gear.pick, undefined, '随机格不能带 pick，否则永远是同一件');
     assert.ok(!JSON.stringify(def).includes('"mode"'), 'mode 是前端状态，不能漏进后端定义');
+    // 默认状态是一张白纸：一进来任何格子都不该替用户做决定
     const fresh = W.assemblyToDefinition({ people: [W.makePerson(9)], scene: W.makeScene() });
-    const freshPools = fresh.slots.map((s) => s.pool);
-    assert.ok(!freshPools.includes('物品'),
-      '装备默认关闭：物品池混着食物厨具，随机只会拉低质量');
-    assert.ok(freshPools.includes('角色') && freshPools.includes('服装'),
-      '角色与衣着默认参与随机');
+    assert.equal(fresh.slots.length, 0, '默认全关：不预先把随机塞进 prompt');
+    assert.equal(W.assemblyIsEmpty({ people: [W.makePerson(9)], scene: W.makeScene() }),
+      true, '默认状态 = 空装配');
+    const allSlots = [...W.PERSON_SLOTS, ...W.SCENE_SLOTS];
+    assert.ok(allSlots.every((d) => d.fallback === 'off'),
+      '每一格的默认值都必须是「关闭」：打开哪格才让哪格参与');
+    assert.ok(!allSlots.some((d) => d.fallback === 'random'), '不能再有默认随机');
   }],
   ['装配：两人各自独立、全关判定为空', () => {
     const a = W.makePerson(1, 'female');
@@ -485,10 +488,10 @@ const cases = [
     assert.equal(def.slots[1].pick, undefined, '第二人随机');
     assert.equal(def.count_tags, '1girl, 1boy');
     const empty = { people: [], scene: W.makeScene() };
-    W.SCENE_SLOTS.forEach((d) => { empty.scene[d.key].mode = 'off'; });
-    assert.equal(W.assemblyIsEmpty(empty), true, '全关应判定为空，回落到配方路径');
-    assert.equal(W.assemblyIsEmpty({ people: [], scene: W.makeScene() }), false,
-      '场景有内容就不算空');
+    assert.equal(W.assemblyIsEmpty(empty), true, '默认全关应判定为空，回落到配方路径');
+    const opened = { people: [], scene: W.makeScene() };
+    opened.scene.background.mode = 'random';
+    assert.equal(W.assemblyIsEmpty(opened), false, '打开一格就不算空');
   }],
   ['装配：app.js 接线与提交优先级', () => {
     const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
@@ -569,13 +572,18 @@ const cases = [
     assert.equal((html.match(/data-scope="person"/g) || []).length, 5);
     assert.match(html, /class="doll-zone m-locked"[^>]*data-key="hair"/, '锁定要画成实线');
     assert.match(html, /class="doll-zone m-off"[^>]*data-key="action"/, '关闭要淡出');
-    assert.match(html, /class="doll-zone m-random"[^>]*data-key="outfit"/, '默认是随机虚线');
+    assert.match(html, /class="doll-zone m-off"[^>]*data-key="outfit"/,
+      '未打开的格子默认关闭：只留底稿身体，不画虚线部位');
+    // 打开一格（随机）才画成虚线
+    p.slots.outfit = { kind: '服装', mode: 'random', pick: '', tags: '' };
+    assert.match(W.dollFigureHtml(p.slots, { uid: 7, gender: 'female' }),
+      /class="doll-zone m-random"[^>]*data-key="outfit"/, '打开随机后画虚线');
     assert.ok(html.includes('data-uid="7"'), '部位点击要带上人物 uid');
-    // 空状态：0 张人物卡也要有个虚线小人，但不能可点（没有可改的对象）
+    // 空状态：0 张人物卡也要有个占位小人，但不能可点（没有可改的对象）
     const ghost = W.dollFigureHtml({}, { ghost: true });
     assert.ok(ghost.includes('is-ghost'));
     assert.ok(!ghost.includes('data-act'), '占位小人不能挂点击事件');
-    assert.match(ghost, /m-random/, '占位小人保持虚线轮廓');
+    assert.match(ghost, /m-off/, '占位小人只有底稿轮廓，没有任何格子是打开的');
     // 男/女轮廓不同，才看得出这是个人
     assert.notEqual(W.dollFigureHtml(p.slots, { uid: 1, gender: 'male' }),
       W.dollFigureHtml(p.slots, { uid: 1, gender: 'female' }));
@@ -584,6 +592,7 @@ const cases = [
     const scene = W.makeScene();
     scene.background = { kind: '背景', mode: 'locked', pick: 'flower field', tags: '' };
     scene.composition = { kind: '构图', mode: 'off', pick: '', tags: '' };
+    scene.style = { kind: '风格', mode: 'random', pick: '', tags: '' };
     const html = W.sceneStageHtml(scene);
     for (const key of ['background', 'style', 'artist', 'composition']) {
       assert.ok(html.includes(`data-key="${key}"`), `场景缺少区域：${key}`);

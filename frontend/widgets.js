@@ -438,24 +438,29 @@ export function conceptDetailHtml(d) {
 // 人数不再是一个开关，而是「人物卡的张数」：0 张无人、1 张单人、N 张多人。
 // 每张卡是一份独立的单人配置，所以「多人」永远不会出现两人共用一套衣服的错乱。
 
-/** 人物的六个格子。off = 这格不参与；random = 每抽重摇；locked = 固定到 pick。 */
+/**
+ * 人物的六个格子。off = 这格不参与；random = 每抽重摇；locked = 固定到 pick。
+ * 默认全关：一进来是一张白纸，用户主动打开的格子才进 prompt。
+ * 以前默认「角色/发型/衣着 随机」，等于用户什么都没选就先替他做了三个决定，
+ * 摇错了还得先关掉再重开，比从零开始更费事。
+ */
 export const PERSON_SLOTS = [
-  { key: 'role', label: '角色', kind: '角色', fallback: 'random' },
-  { key: 'hair', label: '发型', kind: '发型', fallback: 'random' },
+  { key: 'role', label: '角色', kind: '角色', fallback: 'off' },
+  { key: 'hair', label: '发型', kind: '发型', fallback: 'off' },
   { key: 'face', label: '表情', kind: '表情', fallback: 'off' },
-  { key: 'outfit', label: '衣着', kind: '服装', fallback: 'random' },
-  // 物品类下 69 个池混着食物/厨具（sausage、oven mitts），默认随机只会拉低出图质量，
-  // 所以默认关闭：想要装备就点开，搜 sword / hat / glasses 这类具体词。
+  { key: 'outfit', label: '衣着', kind: '服装', fallback: 'off' },
+  // 物品类下 69 个池混着食物/厨具（sausage、oven mitts），随机只会拉低出图质量：
+  // 想要装备就点开，搜 sword / hat / glasses 这类具体词。
   { key: 'gear', label: '装备', kind: '物品', fallback: 'off' },
   { key: 'action', label: '动作', kind: '动作', fallback: 'off' },
 ];
 
-/** 场景的四格：全局生效，不属于任何一个角色。 */
+/** 场景的四格：全局生效，不属于任何一个角色。同样默认全关。 */
 export const SCENE_SLOTS = [
-  { key: 'background', label: '背景', kind: '背景', fallback: 'random' },
-  { key: 'style', label: '画风', kind: '风格', fallback: 'random' },
-  // 画师默认关：`dore \(gilles dore\)` 这类专有名词权重极高，摇错一位画风就全变，
-  // 必须用户主动点开、亲手选，才有「今天用谁的手笔」的意味。
+  { key: 'background', label: '背景', kind: '背景', fallback: 'off' },
+  { key: 'style', label: '画风', kind: '风格', fallback: 'off' },
+  // 画师尤其不能默认开：`dore \(gilles dore\)` 这类专有名词权重极高，
+  // 摇错一位画风就全变，必须用户主动点开、亲手选，才有「今天用谁的手笔」的意味。
   { key: 'artist', label: '画师', kind: '画师', fallback: 'off' },
   { key: 'composition', label: '构图', kind: '构图', fallback: 'off' },
 ];
@@ -463,7 +468,7 @@ export const SCENE_SLOTS = [
 export const SLOT_MODES = ['random', 'locked', 'off'];
 
 /**
- * 一张新的人物卡：默认全是「随机」，只有表情/动作默认关掉，避免 prompt 膨胀。
+ * 一张新的人物卡：默认所有格子都是「关闭」——打开哪格，哪格才参与抽卡。
  * tags 只在锁定后填（条目自带的英文 tag 串），用于状态栏立绘——label 是中文，
  * 概念 key 却是英文 tag，两者不能互相替代。
  */
@@ -546,7 +551,7 @@ export function assemblyIsEmpty(assembly) {
 
 const modeOf = (cfg) => {
   const c = cfg && typeof cfg === 'object' ? cfg : {};
-  return SLOT_MODES.includes(c.mode) ? c.mode : 'random';
+  return SLOT_MODES.includes(c.mode) ? c.mode : 'off';
 };
 
 /**
