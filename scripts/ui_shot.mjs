@@ -92,8 +92,9 @@ const pageErrors = [];
 ws.addEventListener('message', (ev) => {
   const msg = JSON.parse(ev.data);
   if (msg.method === 'Runtime.exceptionThrown') {
-    pageErrors.push(msg.params.exceptionDetails.exception?.description
-      || msg.params.exceptionDetails.text);
+    const d = msg.params.exceptionDetails;
+    const at = d.url ? ` @ ${d.url.replace(URL_, '/').replace(/^http:\/\/[^/]+/, '')}:${d.lineNumber + 1}` : '';
+    pageErrors.push((d.exception?.description || d.text) + at);
   }
   if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
 });

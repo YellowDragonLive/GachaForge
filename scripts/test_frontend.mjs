@@ -2,7 +2,20 @@
 // 不依赖 DOM / 浏览器 / 构建链；用 data URL 加载 .js，避免给项目引入 package.json。
 // 覆盖抽卡 detail 的两种历史形状与各种脏数据，防止 "x.tags.join is not a function" 回归。
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+// 拆模块后「接线断言」不再指向单一文件：把 frontend 下所有 .js 拼起来当一份前端源码查。
+// 断言语义不变（某段 HTML / data-act 必须有对应实现），只是不再关心它写在哪个文件里。
+const jsFiles = [];
+(function walk(dir) {
+  for (const n of readdirSync(dir)) {
+    const fp = dir + '/' + n;
+    if (statSync(fp).isDirectory()) walk(fp);
+    else if (n.endsWith('.js')) jsFiles.push(fp);
+  }
+})(fileURLToPath(new URL('../frontend', import.meta.url)));
+const frontendSrc = () => jsFiles.map((f) => readFileSync(f, 'utf8')).join('\n');
 
 const src = readFileSync(new URL('../frontend/detail.js', import.meta.url), 'utf8');
 const { slotChips, esc, cut } = await import(
@@ -99,7 +112,7 @@ const cases = [
     assert.match(html, /角色: astolfo/);
   }],
   ['抽卡台接线：状态持久化 + 过滤提示 + 不再直接 join', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     for (const needle of [
       "import { esc, cut, slotChips } from './detail.js'",
       'slotChips(d.detail)',
@@ -195,7 +208,7 @@ const cases = [
       /自定义池（自定义）/);
   }],
   ['app.js 接线：过滤构造器 / 槽位表 / LoRA 行', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     for (const needle of [
       "from './widgets.js'", 'id="dFilterPool"', 'id="dFilterTag"', 'hotTagChipsHtml(',
       'function setFilterSpec(', 'async function loadTagOptions(', 'function refreshSlots()',
@@ -326,7 +339,7 @@ const cases = [
     assert.doesNotMatch(xss, /<img src=x>/);
   }],
   ['app.js 接线：按需悬浮 / 封面缓存 / 概念页路由 / 评分换封面', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     for (const needle of [
       'conceptCardsHtml(', 'conceptKindChipsHtml(', 'semanticCardsHtml(',
       'conceptStripHtml(', 'coverPopoverHtml(', 'conceptDetailHtml(',
@@ -364,7 +377,7 @@ const cases = [
     assert.deepEqual(W.missingFilterSlots('fate', recipe, pools), []);
   }],
   ['抽卡台布局：设置 sticky + 结果优先 + 探索并入过滤面板', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
     for (const needle of ['class="draw-shell"', 'class="draw-side"',
       'class="draw-main"', 'function filterPaneHtml(', 'data-act="filter-mode"',
@@ -382,7 +395,7 @@ const cases = [
     assert.doesNotMatch(app, /conceptPanel\(\)/, '旧的全宽概念面板应已移除');
   }],
   ['结果卡内联状态：图长在卡片上，提交生图不再跳任务队列', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
     assert.match(app, /function drawStateHtml\(d\)/, '缺少卡片状态渲染');
     assert.match(app, /function updateDrawCard\(id\)/, '缺少局部刷新');
@@ -404,7 +417,7 @@ const cases = [
     assert.match(css, /\.shot-img\s*\{/, '缺少卡片内缩略图样式');
   }],
   ['缺槽位可就地固定进配方：不用跳配方编辑器再手动选一遍池', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     assert.match(app, /function missingSlots\(\)/, '缺少缺槽位判断');
     assert.match(app, /async function addFilterToRecipe\(\)/, '缺少一键加槽位');
     assert.match(app, /data-act="fix-recipe"/, '提示旁缺少按钮');
@@ -414,7 +427,7 @@ const cases = [
     assert.match(app, /id="filterHintBox"/, '提示区要能随输入更新');
   }],
   ['参数预设就地调参：保存即应用，且不漏传 loras', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     assert.match(app, /async function openTuning\(\)/, '缺少调参抽屉');
     assert.match(app, /function tuningHtml\(\)/, '缺少调参表单');
     assert.match(app, /async function saveTuning\(\)/, '缺少保存逻辑');
@@ -428,7 +441,7 @@ const cases = [
       '保存后应自动应用，否则还要手动重选预设');
   }],
   ['五星评分：点第 n 颗给 n 分、点当前分清零、画廊不再 +1 循环', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     const html = W.ratingStarsHtml(7, 3);
     assert.match(html, /data-stars-for="7"/);
     assert.equal((html.match(/class="star on"/g) || []).length, 3, '3 分应点亮 3 颗');
@@ -538,7 +551,7 @@ const cases = [
       'prompt 不写括号——A1111 里那是权重，不是意群分组');
   }],
   ['意群自由词输入：每个意群可点选、双语候选显示、写英文', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     assert.match(app, /function asmGroupInputHtml\(scope, uid, label\)/, '有意群输入渲染函数');
     assert.match(app, /data-act="asm-extra"/, '有查询输入框');
     assert.match(app, /asmGroupInputHtml\('scene', 0/, '场景意群挂了输入');
@@ -554,7 +567,7 @@ const cases = [
     assert.match(css, /\.vocab-chip \{/, '已选词 chip 样式');
   }],
   ['装配：app.js 接线与提交优先级', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     for (const needle of ['asm-tab', 'asm-add', 'asm-del', 'asm-copy', 'asm-gender',
       'asm-open', 'asm-mode', 'asm-pick', 'asm-close', 'asm-pool', 'asm-q',
       'assemblyPanelHtml', 'asmLoadEntries', '/api/pools/items']) {
@@ -602,7 +615,7 @@ const cases = [
       '随机槽位不该出现锁标记');
   }],
   ['任务卡与状态栏：app.js 接线', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
     for (const needle of ['doll-art', 'data-portrait', 'loadPortraits', 'asm-portrait',
       'dollFigureHtml', 'sceneStageHtml', 'part-k', 'part-v',
@@ -722,7 +735,7 @@ const cases = [
     assert.equal((html.match(/data-act="asm-pick-pool"/g) || []).length, 2,
       'chip 数量要受 limit 控制');
   }],
-  ['池选择接线：选择器渲染 chip 行、默认落在最佳池', () => {    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+  ['池选择接线：选择器渲染 chip 行、默认落在最佳池', () => {    const app = frontendSrc();
     assert.match(app, /poolChipsHtml\(state\.pools/, '选择器要渲染匹配池 chip 行');
     assert.match(app, /case 'asm-pick-pool'/, '点 chip 要有事件');
     assert.match(app, /rankPools\(state\.pools[\s\S]{0,120}item_count/,
@@ -757,7 +770,7 @@ const cases = [
     assert.match(hit, /清除筛选/, '筛选态下第一个 chip 变成清除入口');
   }],
   ['筛选接线：各处都有 input，不是只有一个地方能用', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     // LoRA 选择器的筛选框随 profile 编辑收敛到 features/generation.js
     const gen = readFileSync(new URL('../frontend/features/generation.js', import.meta.url), 'utf8');
     for (const id of ['pLoraPick', 'pCheckpoint', 'tCheckpoint', 'dFilterPool', 'rTplPool']) {
@@ -827,7 +840,7 @@ const cases = [
     assert.ok(!('free' in style) || !style.free, '池里点的条目不许带 free');
   }],
   ['任意值接线：选择器里有「直接写进 prompt」的入口', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     assert.match(app, /data-act="asm-free"/, '自由值按钮要存在');
     assert.match(app, /asmPick\(btn\.dataset\.v, btn\.dataset\.v, true\)/, '点它走同一套锁定逻辑');
     assert.match(app, /asmFreeRowHtml\(\)/, '按钮要随条目刷新');
@@ -840,7 +853,7 @@ const cases = [
     assert.match(css, /\.part\.is-free\.m-locked/, '手填值的格子要有视觉区分');
   }],
   ['画师接线：场景面板与卡池搜索都真接上了', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     assert.match(app, /part\('artist', '画师'/, '场景面板要画出画师格');
     assert.match(app, /data-qtext="\$\{esc\(poolSearchText\(p\)\)\}/, '卡池页搜索要带别名');
     assert.match(app, /matchQuery\(poolSearchText\(p\), q\)/, '池下拉要按别名筛');
@@ -849,7 +862,7 @@ const cases = [
       '画师格与构图并排，不挤掉画布');
   }],
   ['画师图鉴缩略图：条目带样图地址，浮层挂在 body 上不被列表裁掉', () => {
-    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const app = frontendSrc();
     const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
     assert.match(app, /data-thumb-url="\$\{esc\(thumb\)\}"/, '画师条目要带上样图地址');
     assert.match(app, /function showThumbPop/, '要有悬停浮层');
@@ -869,7 +882,7 @@ const cases = [
   }],
   ['data-act 契约：widgets 输出的动作必须有 handler（防死动作漂移）', () => {
     const w = readFileSync(new URL('../frontend/widgets.js', import.meta.url), 'utf8');
-    const a = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const a = frontendSrc();
     const emitted = new Set([...w.matchAll(/data-act="([a-z-]+)"/g)].map((m) => m[1]));
     const handled = new Set([...a.matchAll(/case '([a-z-]+)':/g)].map((m) => m[1]));
     const orphans = [...emitted].filter((x) => !handled.has(x));
