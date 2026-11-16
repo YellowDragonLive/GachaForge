@@ -428,11 +428,15 @@ export const SCENE_SLOTS = [
 
 export const SLOT_MODES = ['random', 'locked', 'off'];
 
-/** 一张新的人物卡：默认全是「随机」，只有表情/动作默认关掉，避免 prompt 膨胀。 */
+/**
+ * 一张新的人物卡：默认全是「随机」，只有表情/动作默认关掉，避免 prompt 膨胀。
+ * tags 只在锁定后填（条目自带的英文 tag 串），用于状态栏立绘——label 是中文，
+ * 概念 key 却是英文 tag，两者不能互相替代。
+ */
 export function makePerson(uid, gender = 'female') {
   const slots = {};
   for (const d of PERSON_SLOTS) {
-    slots[d.key] = { kind: d.kind, mode: d.fallback, pick: '' };
+    slots[d.key] = { kind: d.kind, mode: d.fallback, pick: '', tags: '' };
   }
   return { uid, gender, slots };
 }
@@ -441,7 +445,7 @@ export function makePerson(uid, gender = 'female') {
 export function makeScene() {
   const scene = {};
   for (const d of SCENE_SLOTS) {
-    scene[d.key] = { kind: d.kind, mode: d.fallback, pick: '' };
+    scene[d.key] = { kind: d.kind, mode: d.fallback, pick: '', tags: '' };
   }
   return scene;
 }
@@ -496,4 +500,56 @@ export function assemblyToDefinition(assembly) {
 /** 装配是否真的有内容：全关 = 不算，避免把空定义发给后端。 */
 export function assemblyIsEmpty(assembly) {
   return assemblyToDefinition(assembly).slots.length === 0;
+}
+
+// ---------------- 状态栏立绘：从锁定的条目反查概念封面 ----------------
+// 概念的 key 是英文 tag 的小写形式（`signora (genshin impact)`），而条目的 label
+// 是中文（`希格诺拉 (原神)`）。所以立绘必须走 tags，不能用 label。
+
+/** 条目 tags（逗号分隔文本，也可能已是数组）→ 去空的 tag 列表。 */
+export function splitTags(text) {
+  const list = Array.isArray(text) ? text : String(text || '').split(/[,，;；|\n]+/);
+  return list.map((s) => String(s || '').trim()).filter(Boolean);
+}
+
+// 与后端 strip_count_tags 同一套语义：人数由装配面板统一写，条目自带的必须剥掉。
+const COUNT_TAG_RE = /^(?:\d+\+?|multiple|no)\s*(?:girl|boy|other|human)s?$|^solo(?:\s+focus)?$/i;
+
+/** 剥掉人数类 tag（1girl / 2boys / multiple girls / no humans / solo …）。 */
+export function stripCountTags(tags) {
+  return splitTags(tags).filter((t) => !COUNT_TAG_RE.test(t.replace(/\s+/g, ' ').trim()));
+}
+
+/** 一个 tag → 概念 key：去转义反斜杠、压空白、转小写。 */
+export function conceptKeyOf(tag) {
+  return String(tag || '').replace(/\\/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * 某个格子锁定后，可以用来查立绘的概念 key 候选（按可信度排序）。
+ * 角色条目常是 `1girl, artoria pendragon \(fate\), fate \(series\)`：
+ * 剥掉人数后第一个通常是角色本体，后面的作品名命中率也还行，所以给多候选。
+ */
+export function portraitKeys(cfg) {
+  const c = cfg && typeof cfg === 'object' ? cfg : {};
+  const out = [];
+  for (const t of stripCountTags(c.tags)) {
+    const k = conceptKeyOf(t);
+    if (k && k.length <= 80 && !out.includes(k)) out.push(k);
+    if (out.length >= 3) break;
+  }
+  // 旧会话（tags 字段是后加的）没有 tags：退回用 pick 试一次，命中就当赚到。
+  if (!out.length && c.pick) {
+    const k = conceptKeyOf(c.pick);
+    if (k) out.push(k);
+  }
+  return out;
+}
+
+/** 状态栏标题：锁定了就显示条目名（中文可读），否则说明这格交给骰子。 */
+export function personTitle(person) {
+  const p = person && typeof person === 'object' ? person : {};
+  const role = p.slots && p.slots.role ? p.slots.role : {};
+  const locked = role.mode === 'locked' && role.pick;
+  return locked ? String(role.pick) : '';
 }

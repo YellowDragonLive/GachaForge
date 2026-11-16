@@ -28,8 +28,11 @@ export function slotChips(detail, limit = 20) {
       : (raw == null ? '' : String(raw));
     if (!text.trim()) return '';
     const label = x.label && x.label !== text ? `${x.label} → ` : '';
-    return `<span class="chip" title="${esc(cut(text, 300))}">` +
-      `${esc(name)}: ${esc(cut(label + text, 72))}</span>`;
+    // 锁定的格子要能一眼认出：装配面板里锁了什么，这里就标什么，方便和图逐项对照。
+    const lock = x.locked
+      ? `<i class="chip-lock" title="本次锁定：${esc(x.locked)}">锁</i>` : '';
+    return `<span class="chip${x.locked ? ' locked' : ''}" title="${esc(cut(text, 300))}">` +
+      `${lock}${esc(name)}: ${esc(cut(label + text, 72))}</span>`;
   }).filter(Boolean);
   // 全池随机一次可抽到数百个池，全部铺开会拖垮页面；完整结果已在 prompt 文本框里。
   if (chips.length > limit) {

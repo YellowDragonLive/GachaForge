@@ -503,6 +503,57 @@ const cases = [
     assert.match(app, /filter: useAssembly \? '' :/, '装配模式下不能再叠全局过滤');
     assert.match(app, /data-scope="scene"/, '场景格与人物格要用 scope 区分');
   }],
+  ['状态栏立绘：从条目的英文 tags 推概念 key，不吃中文 label', () => {
+    const cfg = { mode: 'locked', pick: '阿爾托莉亞 (Fate/Grand Order)',
+      tags: '1girl, artoria pendragon \\(fate\\), fate \\(series\\)' };
+    const keys = W.portraitKeys(cfg);
+    assert.equal(keys[0], 'artoria pendragon (fate)', '要取剥掉人数后的第一个 tag');
+    assert.ok(!keys.includes('1girl'), '人数 tag 不能当成概念 key');
+    assert.ok(keys.length <= 3, '候选最多 3 个，避免一串请求');
+    // 旧会话没有 tags：退回 pick 试一次，不能直接空手
+    assert.deepEqual(W.portraitKeys({ mode: 'locked', pick: 'Artoria' }), ['artoria']);
+    assert.deepEqual(W.portraitKeys({ mode: 'random', tags: '' }), []);
+  }],
+  ['状态栏立绘：人数 tag 剥离与后端同一套语义', () => {
+    for (const t of ['1girl', '2boys', 'multiple girls', 'no humans', 'solo', 'solo focus']) {
+      assert.deepEqual(W.stripCountTags(t), [], `${t} 应被剥离`);
+    }
+    // 正常内容不能被误伤
+    assert.deepEqual(W.stripCountTags('girl, artoria'), ['girl', 'artoria']);
+    assert.deepEqual(W.stripCountTags('flower field, blue sky'), ['flower field', 'blue sky']);
+    assert.equal(W.conceptKeyOf('  Artoria \\\\(Fate\\\\) '), 'artoria (fate)');
+  }],
+  ['状态栏立绘：标题只在锁定角色时显示条目名', () => {
+    const p = W.makePerson(1, 'female');
+    assert.equal(W.personTitle(p), '', '默认随机时不该显示角色名');
+    p.slots.role = { kind: '角色', mode: 'locked', pick: '阿爾托莉亞', tags: '1girl, artoria' };
+    assert.equal(W.personTitle(p), '阿爾托莉亞');
+    assert.equal(p.slots.role.tags, '1girl, artoria', '锁定后要记住 tags，立绘靠它查');
+  }],
+  ['任务卡：锁定的槽位要能一眼认出', () => {
+    const html = slotChips([{ slot: '角色', tags: ['artoria'], locked: '阿爾托莉亞' }]);
+    assert.match(html, /chip locked/, '锁定槽位要加 locked 样式');
+    assert.match(html, /chip-lock/, '锁定槽位要有「锁」标记');
+    assert.match(html, /角色: artoria/, '锁定不能吃掉原有内容');
+    assert.doesNotMatch(slotChips([{ slot: '角色', tags: ['artoria'] }]), /chip-lock/,
+      '随机槽位不该出现锁标记');
+  }],
+  ['任务卡与状态栏：app.js 接线', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
+    for (const needle of ['char-portrait', 'data-portrait', 'loadPortraits', 'asm-portrait',
+      'questState', 'quest-badge', 'quest-flag', 'quest-loadout', 'quest-foot',
+      'data-flag-for', 'stat-row']) {
+      assert.ok(app.includes(needle) || css.includes(needle), `缺少接线：${needle}`);
+    }
+    // 徽标与描边要跟着状态走，否则卡片头尾说法不一致
+    assert.match(app, /card\.dataset\.status = st\.key/,
+      '状态变化时任务卡描边要同步');
+    assert.match(app, /loadPortraits\(\)\.catch/,
+      '立绘必须异步补，不能阻塞面板渲染');
+    assert.match(css, /\.quest\[data-status="running"\]\s*\.bar\s*>\s*i/,
+      '生成中要有条纹进度条');
+  }],
 ];
 
 for (const [name, fn] of cases) {

@@ -10,6 +10,7 @@ import {
   coverPopoverHtml, conceptDetailHtml, ratingStarsHtml,
   PERSON_SLOTS, SCENE_SLOTS, makePerson, makeScene, countTagsFor,
   assemblyToDefinition, assemblyIsEmpty,
+  splitTags, stripCountTags, portraitKeys, personTitle,
 } from './widgets.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -51,6 +52,8 @@ const state = {
   conceptThumbMap: {},
   // 封面按需加载：按概念 key 缓存，新图产出后整体失效
   covers: { cache: {}, pending: {} },
+  // 状态栏立绘：概念 key → 封面。与 covers 分开，立绘是常驻显示的，不走 hover 浮层。
+  portraits: {},
   conceptPage: { key: '', label: '', kind: '', pool: '', items: [], total: 0, offset: 0 },
 };
 
@@ -228,24 +231,54 @@ function asmPersonCard(p, idx) {
   const a = state.assembly;
   const picking = a.picking && a.picking.scope === 'person' && a.picking.uid === p.uid
     ? a.picking.key : null;
-  const cells = PERSON_SLOTS.map((d) => asmCellHtml(p.slots[d.key], {
-    label: d.label, scope: 'person', uid: p.uid, key: d.key, open: picking === d.key,
-  })).join('');
   const g = p.gender || 'female';
+  const gIcon = { female: '♀', male: '♂', other: '⚧' }[g] || '♀';
   const gBtn = (v, t) => `<button type="button" class="${g === v ? 'on' : ''}"
     data-act="asm-gender" data-uid="${p.uid}" data-v="${v}">${t}</button>`;
-  return `<div class="asm-card${picking ? ' picking' : ''}">
-    <div class="asm-card-head">
-      <b>人物 ${idx + 1}</b>
+  const role = p.slots.role || {};
+  const name = personTitle(p);
+  const keys = portraitKeys(role);
+  const cached = keys.map((k) => state.portraits[k]).find((c) => c && c.found && c.image);
+  const stats = PERSON_SLOTS.map((d) => asmStatRow(p.slots[d.key], {
+    label: d.label, uid: p.uid, key: d.key, open: picking === d.key,
+  })).join('');
+  // 立绘框是状态栏的核心：能和右侧出的图直接对照「是不是这个人、这身装扮」。
+  const portrait = `<button type="button" class="char-portrait${cached ? ' has-img' : ''}"
+      data-act="asm-portrait" data-uid="${p.uid}"
+      data-portrait="${esc(keys.join(','))}" data-title="${esc(name)}"
+      title="${keys.length ? '点开看这个角色出过的全部历史图' : '锁定角色后，这里会长出他的历史立绘'}">
+      ${cached ? `<img src="${esc(cached.image.url)}" alt="${esc(name || '角色立绘')}" loading="lazy">`
+               : `<span class="char-ph"><i>${gIcon}</i><b>${keys.length ? '…' : '未锁定'}</b></span>`}
+      <span class="char-portrait-k">立绘</span>
+    </button>`;
+  return `<div class="char-sheet${picking ? ' picking' : ''}" data-uid="${p.uid}">
+    <div class="char-head">
+      <span class="char-idx">P${idx + 1}</span>
+      <span class="char-name" title="${esc(name || '角色交给骰子')}">${esc(name || '随机角色')}</span>
       <span class="asm-gender">${gBtn('female', '女')}${gBtn('male', '男')}${gBtn('other', '其他')}</span>
       <span class="asm-card-ops">
         <button type="button" data-act="asm-copy" data-uid="${p.uid}">复制</button>
         <button type="button" data-act="asm-del" data-uid="${p.uid}">移除</button>
       </span>
     </div>
-    <div class="asm-grid">${cells}</div>
+    <div class="char-main">${portrait}<div class="char-stats">${stats}</div></div>
     ${picking ? asmPickerHtml(picking) : ''}
   </div>`;
+}
+
+/** 状态栏的一行属性：左键名、右取值、末端一枚状态灯（随机/锁定/关闭）。 */
+function asmStatRow(cfg, { label, uid, key, open }) {
+  const c = cfg || { mode: 'off', pick: '', kind: '' };
+  const mode = c.mode || 'random';
+  const val = mode === 'locked' ? (c.pick || '已锁定')
+    : (mode === 'off' ? '关闭' : '随机');
+  return `<button type="button" class="stat-row m-${mode}${open ? ' open' : ''}"
+    data-act="asm-open" data-scope="person" data-uid="${uid}" data-key="${key}"
+    title="${esc(val)}">
+    <i class="stat-dot"></i>
+    <span class="stat-k">${esc(label)}</span>
+    <span class="stat-v">${esc(mode === 'locked' ? cut(val, 22) : val)}</span>
+  </button>`;
 }
 
 function asmCellHtml(cfg, { label, scope, uid, key, open }) {
@@ -266,7 +299,8 @@ function asmEntriesHtml() {
   const a = state.assembly;
   if (a.entriesLoading) return '<div class="hint">加载中…</div>';
   const rows = (a.entries || []).map((e) => `<button type="button" class="asm-entry"
-      data-act="asm-pick" data-label="${esc(e.label)}" title="${esc(e.tags || '')}">
+      data-act="asm-pick" data-label="${esc(e.label)}" data-tags="${esc(e.tags || '')}"
+      title="${esc(e.tags || '')}">
       <span class="asm-entry-label">${esc(cut(e.label, 42))}</span>
       <span class="asm-entry-pool">${esc(cut(e.pool, 16))}</span>
     </button>`).join('');
@@ -365,19 +399,22 @@ async function asmSetMode(mode) {
 }
 
 /** 锁定到具体条目。锁角色时顺手按条目里的人数 tag 校正性别，避免 1girl + 男角色的冲突。 */
-async function asmPick(label) {
+async function asmPick(label, tags) {
   const cfg = asmCurrentCfg();
   if (!cfg) return;
   const pk = state.assembly.picking;
   cfg.mode = 'locked';
   cfg.pick = String(label || '');
+  cfg.tags = String(tags || '');
   if (pk && pk.scope === 'person' && pk.key === 'role') {
     const p = state.assembly.people.find((x) => x.uid === pk.uid);
-    const low = String(label || '').toLowerCase();
-    if (p) {
-      if (/\b1boy\b|\bboys?\b|\bmale\b/.test(low)) p.gender = 'male';
-      else if (/\b\d*girls?\b|\bfemale\b/.test(low)) p.gender = 'female';
-    }
+    // 判断性别要看英文 tags：label 是中文（「艾比蓋兒·威廉斯 (旅行服)」），拿它匹配 1girl 永远匹配不到。
+    // 这里必须用原始 tags——stripCountTags 恰好会把 1girl/1boy 剥掉。
+    const hay = `${tags || ''} ${label || ''}`.toLowerCase();
+    const girls = (hay.match(/\b\d*girls?\b/g) || []).length;
+    const boys = (hay.match(/\b\d*boys?\b/g) || []).length;
+    if (p && boys > girls) p.gender = 'male';
+    else if (p && girls > boys) p.gender = 'female';
   }
   state.assembly.picking = null;
   await renderDraw();
@@ -692,6 +729,53 @@ function onCoverOut(e) {
   hideCover(el);
 }
 
+// ---------------- 状态栏立绘：常驻一张，按概念 key 缓存 ----------------
+// 和 hover 浮层不同：立绘是状态栏的一部分，必须一直在，才能和右栏出的图并排比对。
+async function loadPortrait(el) {
+  if (!el || el.dataset.loaded === '1') return;
+  const keys = String(el.dataset.portrait || '').split(',').filter(Boolean);
+  el.dataset.loaded = '1';
+  if (!keys.length) return;
+  for (const key of keys) {
+    if (!(key in state.portraits)) {
+      try {
+        state.portraits[key] = await api.get('/api/concepts/cover?'
+          + new URLSearchParams({ key }));
+      } catch (_) {
+        state.portraits[key] = { key, found: false, image: null };
+      }
+    }
+    const c = state.portraits[key];
+    if (c && c.found && c.image && c.image.url) {
+      paintPortrait(el, c);
+      return;
+    }
+  }
+  el.dataset.miss = '1';   // 这个角色还没出过图：留着占位，等第一次生成后长立绘
+}
+
+function paintPortrait(el, cover) {
+  if (!el || !el.isConnected) return;
+  el.classList.add('has-img');
+  el.innerHTML = `<img src="${esc(cover.image.url)}" alt="${esc(el.dataset.title || '角色立绘')}"
+      loading="lazy"><span class="char-portrait-k">立绘</span>`;
+}
+
+async function loadPortraits(root = view) {
+  const els = [...root.querySelectorAll('.char-portrait[data-portrait]')];
+  await Promise.all(els.map((el) => loadPortrait(el).catch(() => {})));
+}
+
+/** 出了新图就重置立绘：同一个角色刚生成的图，可能正是它该显示的那张。 */
+function resetPortraits() {
+  state.portraits = {};
+  document.querySelectorAll('.char-portrait[data-portrait]').forEach((el) => {
+    delete el.dataset.loaded;
+    delete el.dataset.miss;
+  });
+  loadPortraits().catch(() => {});
+}
+
 // ---------------- 概念详情页：#/concept/<key>，首屏最多 50 张 ----------------
 async function renderConceptPage(key) {
   const d = await api.get('/api/concepts/images?'
@@ -804,22 +888,55 @@ function restoreForm() {
 
 /** 结果卡：状态与图直接长在卡片上，抽完就能看到，不必跳任务队列或画廊。
  *  prompt 收进折叠区——3 抽并排时长 textarea 会把图挤出首屏。 */
+/** 任务状态：一抽就是一张任务卡，徽标与描边都跟着它变，不用切页面看队列。 */
+function questState(d) {
+  const job = state.drawJobs[d.id];
+  const imgs = state.drawImages[d.id] || [];
+  if (imgs.length) return { key: 'done', text: '已完成' };
+  if (!job) return { key: 'todo', text: '待生成' };
+  const s = job.status;
+  if (s === 'queued' || s === 'submitted') return { key: 'queued', text: '排队中' };
+  if (s === 'running' || s === 'cancelling') {
+    const pct = Math.max(0, Math.min(99, Number(job.progress) || 0));
+    return { key: 'running', text: `生成中 ${pct}%` };
+  }
+  if (s === 'succeeded') return { key: 'running', text: '取图中' };
+  return { key: s === 'cancelled' ? 'cancelled' : 'failed',
+    text: s === 'cancelled' ? '已取消' : '失败' };
+}
+
 function drawCard(d) {
   const chips = slotChips(d.detail);
-  return `<div class="card draw-card" data-card="${d.id}">
-    <div class="card-head"><b>第 ${d.idx} 抽</b><span>seed ${esc(d.seed ?? '随机')} · #${d.id}</span></div>
+  const st = questState(d);
+  const no = String(d.idx ?? 1).padStart(2, '0');
+  const lockedN = (Array.isArray(d.detail) ? d.detail : [])
+    .filter((x) => x && x.locked).length;
+  return `<article class="quest" data-card="${d.id}" data-status="${st.key}">
+    <header class="quest-head">
+      <span class="quest-badge">${esc(no)}</span>
+      <div class="quest-title">
+        <b>第 ${esc(d.idx ?? '?')} 抽</b>
+        <span class="quest-sub">seed ${esc(d.seed ?? '随机')} · #${esc(d.id)}</span>
+      </div>
+      <span class="quest-flag" data-flag-for="${d.id}">${esc(st.text)}</span>
+    </header>
     <div class="card-state" data-state-for="${d.id}">${drawStateHtml(d)}</div>
     <details class="card-prompt">
       <summary>prompt 快照 · ${esc(cut(d.prompt, 52))}</summary>
       <textarea data-prompt="${d.id}" id="prompt_${d.id}">${esc(d.prompt)}</textarea>
       <div class="hint">编辑只影响复制，生图始终按抽卡时的快照执行（同 seed 可复现）。</div>
     </details>
-    <div class="tags">${chips || '<span class="hint">无槽位明细</span>'}</div>
-    ${conceptStripHtml(d.detail, state.conceptThumbMap)}
-    <div class="row">
-      <button class="btn small" data-act="copy" data-id="${d.id}">复制 prompt</button>
+    <div class="quest-loadout">
+      <span class="quest-loadout-k">本抽装配${lockedN ? ` · ${lockedN} 项锁定` : ''}</span>
+      <div class="tags">${chips || '<span class="hint">无槽位明细</span>'}</div>
+      ${conceptStripHtml(d.detail, state.conceptThumbMap)}
     </div>
-  </div>`;
+    <footer class="quest-foot">
+      <button class="btn small" data-act="copy" data-id="${d.id}">复制 prompt</button>
+      <button class="btn small" data-act="gen-one" data-id="${d.id}"
+        data-force="1">${st.key === 'done' ? '再抽一版' : '生成此图'}</button>
+    </footer>
+  </article>`;
 }
 
 /** 一抽的状态区：待生成 / 排队 / 进度 / 已出图 / 失败重试，全部内联。 */
@@ -871,6 +988,11 @@ function updateDrawCard(id) {
   if (!card || !d) return;
   const box = card.querySelector('[data-state-for]');
   if (box) box.innerHTML = drawStateHtml(d);
+  // 徽标与卡片描边一起刷新：状态变化要整张卡都在说同一件事
+  const st = questState(d);
+  card.dataset.status = st.key;
+  const flag = card.querySelector('[data-flag-for]');
+  if (flag) flag.textContent = st.text;
 }
 
 /** 局部重绘星级：不重建列表，评分时画廊不闪、滚动位置也不丢。 */
@@ -900,7 +1022,12 @@ async function refreshDrawStates(ids) {
   if (state.route === 'draw') list.forEach(updateDrawCard);
 }
 
-async function renderDraw() { saveAssembly(); view.innerHTML = drawForm(); }
+async function renderDraw() {
+  saveAssembly();
+  view.innerHTML = drawForm();
+  // 立绘异步补，不阻塞面板渲染；同一个 key 只请求一次（state.portraits 缓存）
+  loadPortraits().catch(() => {});
+}
 
 /** 装配状态随抽卡台一起持久化：刷新 / 切视图回来不用重配一遍两个人物。 */
 function saveAssembly() {
@@ -1348,8 +1475,16 @@ async function onClick(e) {
           btn.dataset.key);
         break;
       case 'asm-close': state.assembly.picking = null; await renderDraw(); break;
+      case 'asm-portrait': {
+        // 有历史图 → 进概念详情页看全部（对比「这次出的像不像」）；还没图 → 直接开角色格
+        const keys = String(btn.dataset.portrait || '').split(',').filter(Boolean);
+        const hit = keys.find((k) => state.portraits[k] && state.portraits[k].found);
+        if (hit) { location.hash = '#/concept/' + encodeURIComponent(hit); break; }
+        await asmOpenPicker('person', Number(btn.dataset.uid) || undefined, 'role');
+        break;
+      }
       case 'asm-mode': await asmSetMode(btn.dataset.v); break;
-      case 'asm-pick': await asmPick(btn.dataset.label); break;
+      case 'asm-pick': await asmPick(btn.dataset.label, btn.dataset.tags); break;
       // --- 过滤构造器：三种输入方式共用一条表达式，全程点选 ---
       case 'filter-mode': await setFilterMode(btn.dataset.v); break;
       case 'tune-open': await openTuning(); break;
@@ -1720,6 +1855,7 @@ function startStream() {
       state.drawJobs[did] = { ...(state.drawJobs[did] || {}), ...ev };
       if (ev.status === 'succeeded') {
         state.covers.cache = {};   // 新图可能成为某个概念的新封面
+        resetPortraits();          // 同一个角色刚出的图，可能就是它该显示的立绘
         const ids = Array.isArray(ev.image_ids) ? ev.image_ids : [];
         // 事件里已带 image_ids：先直接上图，再异步补齐宽高/评分等字段
         if (ids.length) state.drawImages[did] = ids.map((id) => ({ id, rating: 0, favorite: false }));
