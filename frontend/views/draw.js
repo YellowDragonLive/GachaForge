@@ -1,16 +1,17 @@
-// 抽卡台视图：装配结果 → 一抽 → 任务提交 → 结果卡就地更新。
-// 意群装配面板在 features/assembly.js，这里只负责「抽」与「看结果」。
-
 import { api } from '../api.js';
 import { cut, esc, slotChips } from '../detail.js';
-import { assemblyIsEmpty, assemblyToDefinition, conceptStripHtml, filterChipsHtml, quickFilterHtml } from '../widgets.js';
-import { SAMPLERS, SCHEDULERS, modelExtraFields, profileDraft, tuningBody, tuningWorkflowHtml } from '../features/generation.js';
 import { LAST_SESSION_KEY, persistForm, restoreForm as restoreFormState } from '../state.js';
 import { state } from '../store.js';
+import { assemblyIsEmpty, assemblyToDefinition, conceptStripHtml, filterChipsHtml, quickFilterHtml } from '../widgets.js';
+import { refresh } from '../core/router.js';
 import { $, done, fail, num, view } from '../core/ui.js';
 import { asmSummaryText, assemblyPanelHtml, saveAssembly } from '../features/assembly.js';
-import { filterHintBoxHtml, filterPaneHtml, updateFilterHint } from '../features/filter.js';
 import { loadPortraits } from '../features/covers.js';
+import { filterHintBoxHtml, filterPaneHtml, updateFilterHint } from '../features/filter.js';
+import { SAMPLERS, SCHEDULERS, modelExtraFields, profileDraft, tuningBody, tuningWorkflowHtml } from '../features/generation.js';
+
+// 抽卡台视图：装配结果 → 一抽 → 任务提交 → 结果卡就地更新。
+// 意群装配面板在 features/assembly.js，这里只负责「抽」与「看结果」。
 
 // ---------------- 抽卡台 ----------------
 export function drawForm() {
@@ -410,3 +411,45 @@ export async function submitJobs(ids, opts = {}) {
   return data;
 }
 
+// ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
+export const actions = {
+  'draw-and-gen': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await doDraw({ generate: true });
+  },
+  'draw': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await doDraw();
+      // --- 装配面板：场景 / 人物。人数 = 人物卡张数 ---
+  },
+  'tune-open': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await openTuning();
+  },
+  'tune-save': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await saveTuning();
+  },
+  'draw-clear': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+        state.draws = []; state.session = null; state.warnings = [];
+        sessionStorage.setItem(LAST_SESSION_KEY, '0');
+        await refresh('draw');
+  },
+  'gen-all': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await submitJobs(state.draws.map((d) => d.id));
+  },
+  'gen-one': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await submitJobs([id]);
+  },
+  'copy': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        const el = $(`#prompt_${id}`);
+        await navigator.clipboard.writeText(el.value);
+        done('已复制 prompt');
+      }
+  },
+};

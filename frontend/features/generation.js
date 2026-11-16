@@ -1,3 +1,5 @@
+import { $ } from '../core/ui.js';
+import { state } from '../store.js';
 // 生成参数域：workflow / checkpoint / LoRA / 采样参数的唯一真相。
 //
 // 抽卡台的调参抽屉与设置页的预设表单，过去各自拼一份 POST body，导致 workflow

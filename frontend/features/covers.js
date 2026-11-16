@@ -5,7 +5,7 @@
 import { api } from '../api.js';
 import { esc } from '../detail.js';
 import { state } from '../store.js';
-import { view } from '../core/ui.js';
+import { $, view } from '../core/ui.js';
 import { coverPopoverHtml } from '../widgets.js';
 
 // ---------------- 按需悬浮封面：一次只显示一张，按 key 缓存 ----------------

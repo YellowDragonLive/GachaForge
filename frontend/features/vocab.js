@@ -1,11 +1,11 @@
+import { api } from '../api.js';
+import { cut, esc } from '../detail.js';
+import { state } from '../store.js';
+import { refresh } from '../core/router.js';
+import { $, done, fail, toast } from '../core/ui.js';
+
 // 意群双语补全：输入框是「查询工具」，g.extra 是「已确认的英文 tag 串」。
 // 中文查询词绝不写进 extra —— 写进 prompt 的永远是候选对应的英文 tag。
-
-import { api } from '../api.js';
-import { esc, cut } from '../detail.js';
-import { state } from '../store.js';
-import { toast, fail, done } from '../core/ui.js';
-import { refresh } from '../core/router.js';
 
 /** 补全候选行：display 已是「主 · 对照」双语；data-en 是真正写入的英文。 */
 export function vocabSuggestHtml() {
@@ -107,3 +107,29 @@ export function vocabKeydown(t, e) {
     done(`已原样加入「${q}」`);
   }
 }
+
+// ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
+export const actions = {
+  'vocab-pick': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        vocabAddWord(btn.dataset.scope, btn.dataset.uid, btn.dataset.en);
+        done(`已加入「${btn.dataset.en}」`);
+
+      }
+  },
+  'vocab-del': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        const g = vocabTarget(btn.dataset.scope, btn.dataset.uid);
+        if (g) {
+          const words = String(g.extra || '').split(',').map((x) => x.trim()).filter(Boolean);
+          words.splice(Number(btn.dataset.i), 1);
+          g.extra = words.join(', ');
+          await refresh('draw');
+        }
+
+      }
+      // --- 过滤构造器：三种输入方式共用一条表达式，全程点选 ---
+  },
+};

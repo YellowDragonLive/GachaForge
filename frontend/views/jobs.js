@@ -1,10 +1,10 @@
-// 任务队列视图：SSE 之外的拉取式兜底 + 手动刷新/取消/重试。
-
 import { api } from '../api.js';
 import { cut, esc } from '../detail.js';
 import { state } from '../store.js';
-import { $, view } from '../core/ui.js';
 import { refresh } from '../core/router.js';
+import { $, view } from '../core/ui.js';
+
+// 任务队列视图：SSE 之外的拉取式兜底 + 手动刷新/取消/重试。
 
 // ---------------- 任务队列 ----------------
 export function jobsBody() {
@@ -34,3 +34,22 @@ export async function renderJobs() {
 }
 export const refreshJobsBody = () => { const el = $('#jobsBody'); if (el) el.innerHTML = jobsBody(); };
 
+// ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
+export const actions = {
+  'job-refresh': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await refresh('jobs');
+  },
+  'job-cancel': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await api.post(`/api/jobs/${id}/cancel`, {}); await refresh('jobs');
+  },
+  'job-retry': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await api.post(`/api/jobs/${id}/retry`, {}); await refresh('jobs');
+  },
+  'goto-gallery': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+location.hash = '#gallery';
+  },
+};

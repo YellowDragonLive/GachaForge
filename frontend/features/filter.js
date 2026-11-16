@@ -1,18 +1,14 @@
-// 过滤构造器：三种输入方式（按池/tag、看图选概念、一句话找画师）共用一条表达式。
-// 这里只负责「表达式怎么构造、提示怎么显示」；概念墙数据在 views/concepts。
-
 import { api } from '../api.js';
 import { esc } from '../detail.js';
+import { debounce, persistForm } from '../state.js';
 import { state } from '../store.js';
-import { persistForm } from '../state.js';
+import { addFilter, conceptCardsHtml, conceptKindChipsHtml, filterChipsHtml, hotTagChipsHtml, missingFilterSlots, parseFilterSpec, poolOptionsHtml, quickFilterHtml, removeFilter, semanticCardsHtml, tagOptionsHtml } from '../widgets.js';
 import { $, done } from '../core/ui.js';
-import { refresh } from '../core/router.js';
-import { loadConcepts, semanticHintHtml } from '../views/concepts.js';
-import {
-  missingFilterSlots, parseFilterSpec, filterChipsHtml, hotTagChipsHtml,
-  poolOptionsHtml, tagOptionsHtml, quickFilterHtml, conceptKindChipsHtml,
-  conceptCardsHtml, semanticCardsHtml,
-} from '../widgets.js';
+import { loadConcepts, loadSemantics, semanticHintHtml, syncConceptPanel } from '../views/concepts.js';
+import { renderDraw } from '../views/draw.js';
+
+// 过滤构造器：三种输入方式（按池/tag、看图选概念、一句话找画师）共用一条表达式。
+// 这里只负责「表达式怎么构造、提示怎么显示」；概念墙数据在 views/concepts。
 
 const FEEL_PRESETS = ['黄昏逆光、有点忧郁的校园少女', '厚涂暗色调',
   '萌系水彩治愈', '精致水光肌韩系'];
@@ -188,3 +184,58 @@ export function filterTagQInput(t) {
   state.filterTagQ = t.value;
   loadTagOptions(state.filterPool, t.value.trim(), true);
 }
+
+// ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
+export const actions = {
+  'filter-mode': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await setFilterMode(btn.dataset.v);
+  },
+  'filter-add': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        // 搜索框里手打的优先于下拉选中项；加完清空并把候选恢复成热门。
+        const tag = $('#dFilterTagQ')?.value.trim() || $('#dFilterTag')?.value;
+        if (!tag) throw new Error('先选一个 tag，或点下方热门 tag');
+        setFilterSpec(addFilter(state.form.filter, state.filterPool, tag));
+        const q = $('#dFilterTagQ'); if (q) q.value = '';
+        state.filterTagQ = '';
+        loadTagOptions(state.filterPool, '');
+        done(`已添加过滤：${state.filterPool ? state.filterPool + ':' : ''}${tag}`);
+      }
+  },
+  'filter-hot': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+        setFilterSpec(addFilter(state.form.filter, state.filterPool, btn.dataset.v));
+  },
+  'filter-del': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+        setFilterSpec(removeFilter(state.form.filter, i));
+  },
+  'filter-clear': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+        setFilterSpec(''); syncConceptPanel();
+  },
+  'fix-recipe': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await addFilterToRecipe();
+      // --- 通用概念缩略图：点图即选，沿用已有过滤构造器 ---
+  },
+  'feel-chip': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        const el = $('#semanticQ'); if (el) el.value = btn.dataset.v;
+        await loadSemantics(btn.dataset.v);
+      }
+  },
+  'semantic-go': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+        await loadSemantics($('#semanticQ')?.value.trim() || '');
+  },
+  'semantic-pick': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+        setFilterSpec(addFilter(state.form.filter, '画师', btn.dataset.v));
+        syncConceptPanel();
+        done(`已按画师过滤：${btn.dataset.v}`);
+  },
+};

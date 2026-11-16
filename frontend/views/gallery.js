@@ -1,10 +1,11 @@
-// 画廊视图：图片墙、筛选、灯箱、导出。
-
 import { api } from '../api.js';
 import { cut, esc } from '../detail.js';
-import { ratingStarsHtml } from '../widgets.js';
 import { state } from '../store.js';
-import { $, view } from '../core/ui.js';
+import { ratingStarsHtml } from '../widgets.js';
+import { refresh } from '../core/router.js';
+import { $, done, view } from '../core/ui.js';
+
+// 画廊视图：图片墙、筛选、灯箱、导出。
 
 // ---------------- 画廊 ----------------
 export async function loadImages() {
@@ -66,3 +67,38 @@ export function openLightbox(id) {
   $('#lightbox').hidden = false;
 }
 
+// ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
+export const actions = {
+  'img-open': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+openLightbox(id);
+  },
+  'img-rerun': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        const im = state.images.find((x) => x.id === id);
+        await api.post('/api/jobs', { draw_ids: [im.meta.draw_id], force: true });
+        done('已用同一抽卡结果重新提交任务'); location.hash = '#jobs';
+      }
+  },
+  'gallery-scan': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        const path = $('#galleryDir').value.trim();
+        if (!path) throw new Error('请填写图片目录');
+        const r = await api.post('/api/images/register-dir', { path });
+        done(`注册完成：新增 ${r.added} 张`); await refresh('gallery');
+      }
+  },
+  'gallery-export': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        const ids = state.images.map((x) => x.id).join(',');
+        const data = await api.get('/api/images/export?ids=' + encodeURIComponent(ids));
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = 'gacha_gallery_meta.json'; a.click();
+        URL.revokeObjectURL(a.href); done('元数据已导出');
+      }
+  },
+};

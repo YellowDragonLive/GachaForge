@@ -352,13 +352,15 @@ const cases = [
       'function loadSemantics(', 'function syncConceptPanel()',
       'function showCover(', 'function hideCover(', 'function onCoverOver(',
       'function renderConceptPage(', "raw.startsWith('concept/')",
-      "case 'concept-pick'", "case 'semantic-pick'", "case 'concept-kind'",
-      "case 'concept-more'", "case 'img-rate'", "case 'img-fav'",
+      // 动作已按域搬进注册表：断言语义仍是「这个动作必须有人接」，不再绑定 switch 写法
+      /'concept-pick':/, /'semantic-pick':/, /'concept-kind':/,
+      /'concept-more':/, /'img-rate':/, /'img-fav':/,
       '/api/concepts/wall', '/api/concepts/cover', '/api/concepts/images',
       'mouseover', 'focusin', 'state.covers.cache = {}',
       'id="conceptWall"', 'id="semanticCards"',
     ]) {
-      assert.ok(app.includes(needle), `app.js 缺少接线：${needle}`);
+      const hit = needle instanceof RegExp ? needle.test(app) : app.includes(needle);
+      assert.ok(hit, `缺少接线：${needle}`);
     }
     assert.doesNotMatch(app, /thumbs: '2'/, '概念墙不再一次拉多张缩略图');
   }],
@@ -741,7 +743,7 @@ const cases = [
   }],
   ['池选择接线：选择器渲染 chip 行、默认落在最佳池', () => {    const app = frontendSrc();
     assert.match(app, /poolChipsHtml\(state\.pools/, '选择器要渲染匹配池 chip 行');
-    assert.match(app, /case 'asm-pick-pool'/, '点 chip 要有事件');
+    assert.match(app, /asm-pick-pool['"]\s*:/, '点 chip 要有 handler（已搬进装配域注册表）');
     assert.match(app, /rankPools\(state\.pools[\s\S]{0,120}item_count/,
       '打开选择器时要默认落在条目最多的匹配池');
     const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
@@ -884,20 +886,21 @@ const cases = [
     const api = readFileSync(new URL('../backend/app/api/semantics.py', import.meta.url), 'utf8');
     assert.match(api, /@router\.get\("\/artist-thumb"\)/);
   }],
-  ['data-act 契约：widgets 输出的动作必须有 handler（防死动作漂移）', () => {
-    const w = readFileSync(new URL('../frontend/widgets.js', import.meta.url), 'utf8');
+  ['data-act 契约：模板产出的每个动作都有人接（防死动作漂移）', () => {
+    // 动作已按域搬进各模块的 actions 注册表，键形如 `'draw': async (btn) => {`。
+    // 校验对象也从「app.js 的 switch」变成「全前端注册表」，覆盖面反而更全。
     const a = frontendSrc();
-    const emitted = new Set([...w.matchAll(/data-act="([a-z-]+)"/g)].map((m) => m[1]));
-    const handled = new Set([...a.matchAll(/case '([a-z-]+)':/g)].map((m) => m[1]));
-    const orphans = [...emitted].filter((x) => !handled.has(x));
+    const emitted = new Set([...a.matchAll(/data-act="([a-z0-9-]+)"/g)].map((m) => m[1]));
+    const handled = new Set([...a.matchAll(/^  '([a-z0-9-]+)':\s*(?:async\s*)?\(/gm)].map((m) => m[1]));
+    // input / select 的 data-act 不走点击委派，由 app.js 的 onInput / onChange / keydown 分支处理。
+    const eventLevel = new Set([...a.matchAll(/dataset\.act === '([a-z0-9-]+)'/g)].map((m) => m[1]));
+    const orphans = [...emitted].filter((x) => !handled.has(x) && !eventLevel.has(x));
     assert.deepEqual(orphans, [],
-      `widgets 输出但 app.js 无 handler 的死动作: ${orphans.join(', ')}`);
-    // 反方向：app.js 有 case 但没有任何模板输出，也是死代码
-    const dead = [...handled].filter((x) =>
-      !emitted.has(x) && !a.includes(`data-act="${x}"`) && !w.includes(`data-act="${x}"`));
-    // 有些动作是动态拼出来的（如 asm-pick），只警告明显拼错的
-    assert.ok(!dead.includes('semantic-clear'), 'semantic-clear 已无任何发射方，应删');
-    assert.ok(handled.has('concept-open'), '不可过滤概念卡点的 concept-open 必须有 case');
+      `有模板输出但无人接的动作（点了没反应）: ${orphans.join(', ')}`);
+    // 反方向：注册了但没有任何模板输出，也是死代码
+    const dead = [...handled].filter((x) => !emitted.has(x));
+    assert.deepEqual(dead, [], `已注册但没有任何模板产出的死动作: ${dead.join(', ')}`);
+    assert.ok(handled.has('concept-open'), '不可过滤概念卡点的 concept-open 必须有 handler');
   }],
 ];
 

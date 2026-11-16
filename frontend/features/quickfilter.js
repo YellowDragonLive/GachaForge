@@ -3,6 +3,7 @@
 // 输入即过滤，Enter 直接选中第一个匹配项，Esc 清空 —— 「筛 → 选 → 重来」三种键盘动作，
 // 鼠标用户照旧点。落点见设置页（LoRA / checkpoint）、调参抽屉、抽卡装配、配方模板池。
 
+import { $ } from '../core/ui.js';
 import { queryWords, matchQuery } from '../widgets.js';
 
 // ---------------- 快速筛选：一个 input 让长列表就地变短 ----------------

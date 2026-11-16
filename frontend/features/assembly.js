@@ -1,20 +1,17 @@
+import { $ } from '../core/ui.js';
+import { api, friendlyError } from '../api.js';
+import { cut, esc } from '../detail.js';
+import { ASM_KEY } from '../state.js';
+import { state } from '../store.js';
+import { DOLL_PARTS, PERSON_SLOTS, SCENE_SLOTS, assemblyIsEmpty, countTagsFor, dollFigureHtml, makePerson, makeScene, matchQuery, personTitle, poolChipsHtml, poolSearchText, portraitKeys, queryWords, rankPools, sceneStageHtml } from '../widgets.js';
+import { refresh } from '../core/router.js';
+import { setQfCount } from './quickfilter.js';
+import { vocabSuggestHtml } from './vocab.js';
+
 // 装配面板：场景 / 人物。
 // 人数是「人物卡的张数」，不是开关：删卡就少一个人，0 张就是纯场景图。
 // 所有对抽卡台的整页刷新一律走 refresh('draw')——抽卡视图在 views/draw，
 // 这里 import 它就是循环依赖。
-
-import { api } from '../api.js';
-import { esc, cut } from '../detail.js';
-import { state } from '../store.js';
-import { $, fail } from '../core/ui.js';
-import { refresh } from '../core/router.js';
-import { setQfCount } from './quickfilter.js';
-import { vocabSuggestHtml } from './vocab.js';
-import {
-  countTagsFor, assemblyIsEmpty, sceneStageHtml, dollFigureHtml, personTitle,
-  portraitKeys, DOLL_PARTS, SCENE_SLOTS, PERSON_SLOTS, rankPools, poolChipsHtml,
-  queryWords, matchQuery, poolSearchText,
-} from '../widgets.js';
 
 // ---------------- 装配面板：场景 / 人物 ----------------
 // 人数是「人物卡的张数」，不是开关：删卡就少一个人，0 张就是纯场景图。
@@ -75,7 +72,6 @@ export function asmGroupInputHtml(scope, uid, label) {
   ${words.length ? `<div class="vocab-chosen" ${su}>${chips}</div>` : ''}
   <div class="vocab-suggest" ${su} ${active && state.vocab.open ? '' : 'hidden'}>${active ? vocabSuggestHtml() : ''}</div>`;
 }
-
 
 export function asmSceneHtml() {
   const a = state.assembly;
@@ -514,3 +510,93 @@ export function asmPoolChange(t) {
 }
 
 let asmTimer = null;
+
+// ---- 动作注册表：data-act → 处理器（app.js 事件委派调用）----
+export const actions = {
+  'asm-tab': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+state.assembly.tab = btn.dataset.v; await refresh('draw');
+  },
+  'asm-add': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        const a = state.assembly;
+        a.people.push(makePerson(a.nextUid++));
+        a.tab = 'people';
+        await refresh('draw');
+
+      }
+  },
+  'asm-del': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        const a = state.assembly;
+        a.people = a.people.filter((p) => p.uid !== Number(btn.dataset.uid));
+        a.picking = null;
+        await refresh('draw');
+
+      }
+  },
+  'asm-copy': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        const a = state.assembly;
+        const src = a.people.find((p) => p.uid === Number(btn.dataset.uid));
+        if (src) {
+          const clone = makePerson(a.nextUid++, src.gender);
+          clone.slots = JSON.parse(JSON.stringify(src.slots));
+          a.people.push(clone);
+        }
+        await refresh('draw');
+
+      }
+  },
+  'asm-gender': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        const p = state.assembly.people.find((x) => x.uid === Number(btn.dataset.uid));
+        if (p) p.gender = btn.dataset.v;
+        await refresh('draw');
+
+      }
+  },
+  'asm-open': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+        await asmOpenPicker(btn.dataset.scope, Number(btn.dataset.uid) || undefined,
+          btn.dataset.key);
+
+  },
+  'asm-pick-pool': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+        await asmPickPool(btn.dataset.v);
+
+  },
+  'asm-close': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+state.assembly.picking = null; await refresh('draw');
+  },
+  'asm-portrait': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+{
+        // 有历史图 → 进概念详情页看全部（对比「这次出的像不像」）；还没图 → 直接开角色格
+        const keys = String(btn.dataset.portrait || '').split(',').filter(Boolean);
+        const hit = keys.find((k) => state.portraits[k] && state.portraits[k].found);
+        if (hit) { location.hash = '#/concept/' + encodeURIComponent(hit); return; }
+        await asmOpenPicker('person', Number(btn.dataset.uid) || undefined, 'role');
+
+      }
+  },
+  'asm-mode': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await asmSetMode(btn.dataset.v);
+  },
+  'asm-pick': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await asmPick(btn.dataset.label, btn.dataset.tags);
+      // 手填值：同一套锁定逻辑，只是 tags 不来自池子
+  },
+  'asm-free': async (btn) => {
+    const id = Number(btn.dataset.id), i = Number(btn.dataset.i);
+await asmPick(btn.dataset.v, btn.dataset.v, true);
+  },
+};
