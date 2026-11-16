@@ -87,6 +87,31 @@ DEFAULT_PROFILE = {
     "workflow": "sdxl_minimal.json",
 }
 
+# 三套 base 预设，覆盖所有已注册 workflow。按名字幂等创建（不覆盖已有同名预设）。
+# extras 里的 key/value 会写入 profile_params 表，不改主表结构。
+BASE_PROFILES: list[dict[str, Any]] = [
+    DEFAULT_PROFILE,
+    {
+        # Turbo 组合：10 步 + CFG 1.0 + turbo LoRA 必须成套。缺 LoRA 或把 CFG 抬到
+        # 4.5（那是 Base 模式的取值），10 步的 latent 根本没收敛，CFG 再放大就成色块。
+        "name": "默认 Anima", "checkpoint": "", "steps": 10, "cfg": 1.0,
+        "loras": [{"name": "anima-turbo-lora-v0.2.safetensors", "weight": 1.0}],
+        "sampler": "euler", "scheduler": "normal", "width": 1024,
+        "height": 1344, "negative": "worst quality, low quality",
+        "workflow": "anima.json",
+        "extras": {"clip": "qwen_3_06b_base.safetensors",
+                   "vae": "qwen_image_vae.safetensors"},
+    },
+    {
+        "name": "默认 MOSS", "checkpoint": "", "loras": [], "steps": 8, "cfg": 1.0,
+        "sampler": "euler", "scheduler": "simple", "width": 768,
+        "height": 768, "negative": "",
+        "workflow": "moss.json",
+        "extras": {"clip": "qwen3.5_9b_w4a8_gptq.safetensors",
+                   "vae": "flux2-vae_small.safetensors"},
+    },
+]
+
 
 def profile_out(row: GenProfile, db: Session | None = None) -> dict:
     out = {"id": row.id, "name": row.name, "checkpoint": row.checkpoint,
@@ -110,15 +135,28 @@ def list_profiles(db: Session) -> list[dict]:
 
 
 def ensure_default_profile(db: Session) -> GenProfile:
-    row = db.scalar(select(GenProfile).where(GenProfile.name == DEFAULT_PROFILE["name"]))
-    if row:
-        return row
-    fields = {k: v for k, v in DEFAULT_PROFILE.items() if k != "loras"}
-    row = GenProfile(**fields, loras_json="[]")
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return row
+    """确保三套 base 预设存在（幂等，按名字判重）。返回第一条供 fallback。"""
+    first: GenProfile | None = None
+    for tmpl in BASE_PROFILES:
+        row = db.scalar(select(GenProfile).where(GenProfile.name == tmpl["name"]))
+        if row is None:
+            fields = {k: v for k, v in tmpl.items() if k not in ("loras", "extras")}
+            # loras 以前被硬编码成 "[]"，模板里写了也白写；Turbo 预设靠它带 turbo LoRA。
+            row = GenProfile(**fields, loras_json=_dump(tmpl.get("loras") or []))
+            db.add(row)
+            db.flush()
+            # 模型族专有参数写入 profile_params（clip/vae 等）
+            extras = tmpl.get("extras") or {}
+            wid = Path(str(tmpl.get("workflow") or "sdxl")).stem
+            for key, value in extras.items():
+                db.add(ProfileParam(
+                    profile_id=row.id, workflow_id=wid,
+                    key=key, value_json=_dump(value)))
+            db.commit()
+            db.refresh(row)
+        if first is None:
+            first = row
+    return first  # type: ignore[return-value]
 
 
 def upsert_profile(db: Session, data: dict) -> dict:
