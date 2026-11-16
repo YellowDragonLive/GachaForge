@@ -694,6 +694,10 @@ const cases = [
       assert.match(app, new RegExp(`quickFilterHtml\\('${id}'`), `${id} 旁边要有筛选框`);
     }
     assert.match(app, /data-asm-pool-q/, '抽卡装配的池 chip 行要能筛');
+    assert.match(app, /冷存/, '冷存池要在下拉兜底里可见（否则「明明导入过怎么没有」）');
+    assert.match(app, /a\.picking !== token/, '条目加载要丢过期响应（换格后旧数据不许覆盖新格）');
+    assert.match(readFileSync(new URL('../frontend/api.js', import.meta.url), 'utf8'),
+      /AbortSignal\.timeout/, 'API 请求要有超时，加载中不能永久卡死');
     assert.match(app, /pickerPool && \(!a\.pickerQ \|\| a\.pickerLocked\)/,
       '搜索要跨池：默认池只在没搜索或用户手动锁池时生效');
     const py = readFileSync(new URL('../backend/app/services/pools.py', import.meta.url), 'utf8');

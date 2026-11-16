@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.types import Scope
 
 from .api import concepts, draws, images, jobs, pools, recipes, semantics, system
 from .config import get_settings
@@ -101,8 +102,17 @@ def create_app() -> FastAPI:
     for module in (system, pools, recipes, draws, jobs, images, semantics, concepts):
         app.include_router(module.router)
 
-    # 前端是零框架静态页，由同一个进程托管，不需要第二个服务
-    app.mount("/", StaticFiles(directory=str(s.frontend_dir), html=True),
+    # 前端是零框架静态页，由同一个进程托管，不需要第二个服务。
+    # 开发期前后端同进程、改 JS 不重启：必须 no-cache（浏览器每次带 ETag 回源校验，
+    # 未变仍是 304，代价可忽略），否则用户刷新拿到的可能是上一版 JS——
+    # 「点了没反应 / 一直加载中」多半是这个，而不是真 bug。
+    class NoCacheStaticFiles(StaticFiles):
+        async def get_response(self, path: str, scope: Scope):
+            res = await super().get_response(path, scope)
+            res.headers["Cache-Control"] = "no-cache"
+            return res
+
+    app.mount("/", NoCacheStaticFiles(directory=str(s.frontend_dir), html=True),
               name="frontend")
     return app
 

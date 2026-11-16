@@ -23,10 +23,15 @@ async function request(path, { method = 'GET', body, retry = 0 } = {}) {
           ? { 'X-Gacha-Token': localStorage.getItem('gacha_token') } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      // 没有超时的请求会把「加载中…」永远钉在界面上（服务重启 / 连接半开时）。
+      // 20s 覆盖所有正常接口；出图轮询走 SSE，不在这里。
+      signal: AbortSignal.timeout(20000),
     });
     payload = await res.json().catch(() => ({}));
   } catch (e) {
-    const err = new Error('无法连接服务，请确认 start.bat 仍在运行');
+    const err = e?.name === 'TimeoutError'
+      ? new Error('服务响应超时，请稍后重试或确认 start.bat 仍在运行')
+      : new Error('无法连接服务，请确认 start.bat 仍在运行');
     err.offline = true;
     throw err;
   }

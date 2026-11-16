@@ -398,17 +398,24 @@ function asmPickerHtml(key) {
   </div>`;
 }
 
-/** 下拉兜底：chip 行只摆前 8 个匹配池，剩下的都在这里，选哪池都行。 */
+/** 下拉兜底：chip 行只摆前 8 个匹配池，剩下的都在这里，选哪池都行。
+ * 冷存池不进推荐（chip 行），但必须出现在下拉里 —— 否则「action 这个池明明导入过，
+ * 选择器里怎么没有」永远是个谜；名字前挂（冷存）说明它为什么排在最后。 */
 function asmPoolOptionsHtml(ranked, current, q = '') {
+  const extra = state.pools.filter((p) => p && p.enabled === false
+    && String(p.kind || '') === String(asmPickingKind() || '')
+    && !ranked.some((r) => r.name === p.name));
+  const list = [...ranked, ...extra];
   const words = queryWords(q);
   const hit = words.length
-    ? ranked.filter((p) => matchQuery(`${p.name} ${p.kind}`, q))
-    : ranked;
+    ? list.filter((p) => matchQuery(`${p.name} ${p.kind}`, q))
+    : list;
   const total = hit.reduce((s, p) => s + Number(p.item_count || 0), 0);
   const opts = [`<option value="">${words.length ? '筛选后' : '全部'} ${total} 条</option>`];
   hit.forEach((p) => {
     const name = String(p.name || '');
-    opts.push(`<option value="${esc(name)}"${name === current ? ' selected' : ''}>${esc(cut(name, 34))} · ${p.item_count || 0}</option>`);
+    const mark = p.enabled === false ? '（冷存）' : '';
+    opts.push(`<option value="${esc(name)}"${name === current ? ' selected' : ''}>${mark}${esc(cut(name, 34))} · ${p.item_count || 0}</option>`);
   });
   if (words.length && !hit.length) opts.push('<option value="">没有匹配的池</option>');
   return opts.join('');
@@ -462,7 +469,8 @@ async function asmPickPool(name) {
   const a = state.assembly;
   if (!a.picking) return;
   a.pickerPool = String(name || '');
-  a.pickerLocked = true;       // 手动点过 chip = 明确要看这一池，搜索也不再跨池
+  // 手动点过 chip = 明确要看这一池，搜索也不再跨池；点「全部」则解锁恢复跨池
+  a.pickerLocked = !!a.pickerPool;
   await renderDraw();          // chip 高亮与下拉选中值都要跟着变
   await asmLoadEntries();
 }
@@ -470,6 +478,7 @@ async function asmPickPool(name) {
 async function asmLoadEntries() {
   const a = state.assembly;
   if (!a.picking) return;
+  const token = a.picking;    // 过期防护：等待期间换了格，旧响应不许写进新格的列表
   const def = [...SCENE_SLOTS, ...PERSON_SLOTS].find((d) => d.key === a.picking.key);
   const kind = def ? def.kind : '';
   a.entriesLoading = true;
@@ -483,13 +492,16 @@ async function asmLoadEntries() {
     // 只有用户手动点过 chip / 下拉，才把范围锁在他明确选中的那一池。
     if (a.pickerPool && (!a.pickerQ || a.pickerLocked)) qs.set('pool', a.pickerPool);
     const data = await api.get('/api/pools/items?' + qs.toString());
+    if (a.picking !== token) return;   // 已经在别的格了：丢弃
     a.entries = data.items || [];
     a.entriesTotal = data.total || 0;
   } catch (err) {
+    if (a.picking !== token) return;
     a.entries = []; a.entriesTotal = 0;
     if (box) box.innerHTML = `<div class="hint err-text">条目加载失败：${esc(friendlyError(err))}</div>`;
+    return;
   } finally {
-    a.entriesLoading = false;
+    if (a.picking === token) a.entriesLoading = false;
   }
   // 只更新列表与计数，不重建输入框：否则打字时每次都失焦
   if (box) box.innerHTML = asmEntriesHtml();
@@ -2075,7 +2087,12 @@ function onChange(e) {
     return;
   }
   if (t.dataset && t.dataset.act === 'asm-pool') {
-    state.assembly.pickerPool = t.value;
+    // 下拉选池和点 chip 必须同一语义：明确选了池就锁住（之后搜索只在这池里），
+    // 选「全部」解锁恢复跨池；chip 高亮也要跟着变，不然两处显示互相矛盾。
+    const a = state.assembly;
+    a.pickerPool = t.value;
+    a.pickerLocked = !!t.value;
+    refreshAsmPools();
     asmLoadEntries();
     return;
   }
@@ -2196,3 +2213,7 @@ async function boot() {
 }
 
 boot();
+
+// 诊断句柄：控制台 / 探针脚本可以直接读 state，省掉「问题只在线上、本地复现不了」的猜测。
+// 只挂引用不改行为，不影响正常功能。
+window.__gacha = { state, api };
