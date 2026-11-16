@@ -11,6 +11,7 @@ import {
   PERSON_SLOTS, SCENE_SLOTS, makePerson, makeScene, countTagsFor,
   assemblyToDefinition, assemblyIsEmpty,
   splitTags, stripCountTags, portraitKeys, personTitle,
+  dollFigureHtml, sceneStageHtml, DOLL_PARTS,
 } from './widgets.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -208,49 +209,56 @@ function assemblyPanelHtml() {
 }
 
 function asmSceneHtml() {
-  const scene = state.assembly.scene;
-  const cells = SCENE_SLOTS.map((d) => asmCellHtml(scene[d.key], {
-    label: d.label, scope: 'scene', key: d.key,
-    open: state.assembly.picking && state.assembly.picking.scope === 'scene'
-      && state.assembly.picking.key === d.key,
-  })).join('');
-  return `<div class="asm-grid">${cells}</div>
-    <p class="hint" style="margin:8px 0 0">画风对所有人物统一生效。场景全关 = 白底纯人物。</p>`;
+  const a = state.assembly;
+  const scene = a.scene;
+  const open = (k) => a.picking && a.picking.scope === 'scene' && a.picking.key === k;
+  const part = (key, label, side) => asmPartHtml(scene[key], {
+    label, key, scope: 'scene', open: open(key), side,
+  });
+  // 场景也是一张图：虚线画框里点画面 = 背景、点色点 = 画风、点画框 = 构图。
+  return `<div class="stage-grid">
+    ${part('background', '背景', 'l')}
+    ${part('style', '画风', 'r')}
+    <div class="doll doll-stage">${sceneStageHtml(scene)}</div>
+    ${part('composition', '构图', 'wide')}
+  </div>
+  ${a.picking && a.picking.scope === 'scene' ? asmPickerHtml(a.picking.key) : ''}
+  <p class="hint" style="margin:8px 0 0">画风对所有人物统一生效。场景全关 = 白底纯人物。</p>`;
 }
 
 function asmPeopleHtml() {
   const a = state.assembly;
   const cards = a.people.map((p, i) => asmPersonCard(p, i)).join('');
-  const tip = a.people.length ? ''
-    : '<p class="hint" style="margin:8px 0 0">0 个人物 = 纯场景图，prompt 里会写 no humans。</p>';
+  if (!a.people.length) {
+    // 0 张卡 = 纯场景图。空位也摆一个虚线小人：一眼看出「这里本该站个人」。
+    return `<div class="asm-empty">
+      <div class="doll doll-person is-empty">${dollFigureHtml({}, { ghost: true })}</div>
+      <p class="hint">0 个人物 = 纯场景图，prompt 会写 no humans。点下面加人。</p>
+    </div>
+    <button type="button" class="asm-add" data-act="asm-add">＋ 添加人物</button>`;
+  }
   return `${cards}
-    <button type="button" class="asm-add" data-act="asm-add">＋ 添加人物</button>${tip}`;
+    <button type="button" class="asm-add" data-act="asm-add">＋ 添加人物</button>`;
 }
 
+/**
+ * 一张人物卡 = 身体部位面板：角色条在头顶，左右两列是「部位 → 当前值」，
+ * 中间是虚线小人。点左/右的格子或直接点身体，都打开同一格的条目选择器。
+ */
 function asmPersonCard(p, idx) {
   const a = state.assembly;
   const picking = a.picking && a.picking.scope === 'person' && a.picking.uid === p.uid
     ? a.picking.key : null;
   const g = p.gender || 'female';
-  const gIcon = { female: '♀', male: '♂', other: '⚧' }[g] || '♀';
   const gBtn = (v, t) => `<button type="button" class="${g === v ? 'on' : ''}"
     data-act="asm-gender" data-uid="${p.uid}" data-v="${v}">${t}</button>`;
   const role = p.slots.role || {};
   const name = personTitle(p);
   const keys = portraitKeys(role);
-  const cached = keys.map((k) => state.portraits[k]).find((c) => c && c.found && c.image);
-  const stats = PERSON_SLOTS.map((d) => asmStatRow(p.slots[d.key], {
-    label: d.label, uid: p.uid, key: d.key, open: picking === d.key,
-  })).join('');
-  // 立绘框是状态栏的核心：能和右侧出的图直接对照「是不是这个人、这身装扮」。
-  const portrait = `<button type="button" class="char-portrait${cached ? ' has-img' : ''}"
-      data-act="asm-portrait" data-uid="${p.uid}"
-      data-portrait="${esc(keys.join(','))}" data-title="${esc(name)}"
-      title="${keys.length ? '点开看这个角色出过的全部历史图' : '锁定角色后，这里会长出他的历史立绘'}">
-      ${cached ? `<img src="${esc(cached.image.url)}" alt="${esc(name || '角色立绘')}" loading="lazy">`
-               : `<span class="char-ph"><i>${gIcon}</i><b>${keys.length ? '…' : '未锁定'}</b></span>`}
-      <span class="char-portrait-k">立绘</span>
-    </button>`;
+  const part = (key, side) => asmPartHtml(p.slots[key], {
+    label: (DOLL_PARTS.find((d) => d.key === key) || {}).label || key,
+    key, uid: p.uid, open: picking === key, side,
+  });
   return `<div class="char-sheet${picking ? ' picking' : ''}" data-uid="${p.uid}">
     <div class="char-head">
       <span class="char-idx">P${idx + 1}</span>
@@ -261,37 +269,39 @@ function asmPersonCard(p, idx) {
         <button type="button" data-act="asm-del" data-uid="${p.uid}">移除</button>
       </span>
     </div>
-    <div class="char-main">${portrait}<div class="char-stats">${stats}</div></div>
+    <div class="char-body">
+      ${asmPartHtml(role, { label: '角色', key: 'role', uid: p.uid, open: picking === 'role', side: 'role' })}
+      ${part('hair', 'l')}
+      ${part('face', 'r')}
+      <div class="doll doll-person">
+        <button type="button" class="doll-art" data-act="asm-portrait" data-uid="${p.uid}"
+          data-portrait="${esc(keys.join(','))}" data-title="${esc(name)}"
+          title="${keys.length ? '点这里看这个角色出过的全部历史图'
+            : '点这里锁角色；出过图之后这块就是他的立绘'}"></button>
+        ${dollFigureHtml(p.slots, { uid: p.uid, gender: g })}
+      </div>
+      ${part('outfit', 'l')}
+      ${part('gear', 'r')}
+      ${part('action', 'wide')}
+    </div>
     ${picking ? asmPickerHtml(picking) : ''}
   </div>`;
 }
 
-/** 状态栏的一行属性：左键名、右取值、末端一枚状态灯（随机/锁定/关闭）。 */
-function asmStatRow(cfg, { label, uid, key, open }) {
+/** 一格槽位（左/右列成员、角色条、场景格共用）：点开就是这一格的条目选择器。 */
+function asmPartHtml(cfg, { label, key, uid, scope = 'person', open, side = '' }) {
   const c = cfg || { mode: 'off', pick: '', kind: '' };
   const mode = c.mode || 'random';
   const val = mode === 'locked' ? (c.pick || '已锁定')
     : (mode === 'off' ? '关闭' : '随机');
-  return `<button type="button" class="stat-row m-${mode}${open ? ' open' : ''}"
-    data-act="asm-open" data-scope="person" data-uid="${uid}" data-key="${key}"
-    title="${esc(val)}">
-    <i class="stat-dot"></i>
-    <span class="stat-k">${esc(label)}</span>
-    <span class="stat-v">${esc(mode === 'locked' ? cut(val, 22) : val)}</span>
-  </button>`;
-}
-
-function asmCellHtml(cfg, { label, scope, uid, key, open }) {
-  const c = cfg || { mode: 'off', pick: '', kind: '' };
-  const mode = c.mode || 'random';
-  const val = mode === 'locked' ? (c.pick || '已锁定') : (mode === 'off' ? '关闭' : '随机');
   const attrs = scope === 'scene'
     ? `data-scope="scene" data-key="${key}"`
     : `data-scope="person" data-uid="${uid}" data-key="${key}"`;
-  return `<button type="button" class="asm-cell m-${mode}${open ? ' open' : ''}"
-    data-act="asm-open" ${attrs} title="${esc(val)}">
-    <span class="asm-cell-k">${esc(label)}</span>
-    <span class="asm-cell-v">${esc(cut(val, 12))}</span>
+  return `<button type="button" class="part m-${mode}${open ? ' open' : ''}${side ? ' side-' + side : ''}"
+    data-act="asm-open" ${attrs}
+    title="${esc(`${label}：${val}`)}">
+    <span class="part-k"><i class="stat-dot"></i>${esc(label)}</span>
+    <span class="part-v">${esc(mode === 'locked' ? cut(val, 20) : val)}</span>
   </button>`;
 }
 
@@ -316,8 +326,10 @@ function asmPickerHtml(key) {
   const a = state.assembly;
   const def = [...SCENE_SLOTS, ...PERSON_SLOTS].find((d) => d.key === key);
   const kind = def ? def.kind : '';
+  const label = (def && def.label) || (key === 'role' ? '角色' : key);
   const cfg = asmCurrentCfg();
   return `<div class="asm-picker">
+    <div class="asm-picker-head"><i class="stat-dot"></i>${esc(label)} · 选条目或改状态</div>
     <div class="row">
       <button type="button" class="chip${cfg && cfg.mode === 'random' ? ' on' : ''}"
         data-act="asm-mode" data-v="random">随机</button>
@@ -757,19 +769,21 @@ async function loadPortrait(el) {
 function paintPortrait(el, cover) {
   if (!el || !el.isConnected) return;
   el.classList.add('has-img');
+  if (el.parentElement) el.parentElement.classList.add('has-art');
+  // 立绘铺在小人底下当底图：虚线轮廓叠在照片上，还是能一眼看出哪块是什么。
   el.innerHTML = `<img src="${esc(cover.image.url)}" alt="${esc(el.dataset.title || '角色立绘')}"
-      loading="lazy"><span class="char-portrait-k">立绘</span>`;
+      loading="lazy"><span class="doll-cap">立绘</span>`;
 }
 
 async function loadPortraits(root = view) {
-  const els = [...root.querySelectorAll('.char-portrait[data-portrait]')];
+  const els = [...root.querySelectorAll('.doll-art[data-portrait]')];
   await Promise.all(els.map((el) => loadPortrait(el).catch(() => {})));
 }
 
 /** 出了新图就重置立绘：同一个角色刚生成的图，可能正是它该显示的那张。 */
 function resetPortraits() {
   state.portraits = {};
-  document.querySelectorAll('.char-portrait[data-portrait]').forEach((el) => {
+  document.querySelectorAll('.doll-art[data-portrait]').forEach((el) => {
     delete el.dataset.loaded;
     delete el.dataset.miss;
   });

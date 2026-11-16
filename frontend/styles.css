@@ -257,21 +257,6 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
 .asm-tab.on { background: var(--surface); color: var(--primary);
   box-shadow: var(--shadow); font-weight: 500; }
 
-.asm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.asm-cell { display: flex; flex-direction: column; gap: 1px; text-align: left;
-  padding: 5px 9px; min-height: 44px; border-radius: 8px; background: var(--surface);
-  border: 1px dashed var(--line); color: var(--text); min-width: 0; }
-.asm-cell:hover { border-color: var(--primary); }
-.asm-cell-k { font-size: 11px; color: var(--muted); }
-.asm-cell-v { font-size: 12px; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; max-width: 100%; }
-.asm-cell.m-locked { border: 1.5px solid var(--primary); background: var(--primary-soft); }
-.asm-cell.m-locked .asm-cell-k { color: var(--primary); }
-.asm-cell.m-locked .asm-cell-v { font-weight: 500; }
-.asm-cell.m-off { border-style: solid; border-color: var(--line); opacity: .5; }
-.asm-cell.m-random .asm-cell-v { color: var(--muted); }
-.asm-cell.open { border-style: solid; border-color: var(--primary); }
-
 .asm-card { border: 1px solid var(--line); border-radius: 10px;
   padding: 9px 10px 10px; margin-bottom: 8px; background: var(--surface); }
 .asm-card.picking { border-color: var(--primary); }
@@ -293,6 +278,8 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
 
 .asm-picker { margin-top: 9px; padding: 9px; border-radius: 8px;
   background: var(--surface-2); border: 1px solid var(--line); }
+.asm-picker-head { display: flex; align-items: center; gap: 5px; margin-bottom: 7px;
+  font-size: 11.5px; font-weight: 500; color: var(--primary); }
 .asm-picker .chip { font-size: 11px; }
 .asm-pool { max-width: 170px; }
 .asm-q { flex: 1; min-width: 110px; }
@@ -311,8 +298,8 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
 .asm-alternate > summary { color: var(--muted); font-size: 12px; cursor: pointer; }
 .asm-alternate > summary:hover { color: var(--primary); }
 
-/* ---- 游戏化：人物状态栏（左立绘 + 右属性行）---- */
-/* 左栏加宽到 392px：336px 塞不下 88px 立绘 + 六行属性，会挤成两条。 */
+/* ---- 游戏化：人物状态栏（虚线小人 + 部位格）---- */
+/* 左栏加宽到 392px：部位格两列 + 中间小人，336px 会挤成一列。 */
 .draw-shell { grid-template-columns: 392px minmax(0, 1fr); }
 
 .char-sheet { border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
@@ -325,33 +312,135 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
 .char-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.char-main { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 7px; align-items: stretch; }
-.char-portrait { position: relative; padding: 0; overflow: hidden; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--surface-2); aspect-ratio: 3 / 4;
-  display: flex; align-items: center; justify-content: center; }
-.char-portrait img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.char-portrait:hover { border-color: var(--primary); }
-.char-ph { display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--muted); }
-.char-ph i { font-style: normal; font-size: 19px; line-height: 1; }
-.char-ph b { font-size: 10px; font-weight: 400; }
-.char-portrait-k { position: absolute; left: 3px; bottom: 3px; font-size: 9px; line-height: 1.5;
-  padding: 0 4px; border-radius: 3px; background: rgba(20, 30, 60, .62); color: #fff; }
+/* 部位版面：角色条在头顶，发型/表情贴着头，衣着/装备贴着身体，动作横在脚下。
+   名字与顺序就是「物品(prompt) → 人物部位」的对应关系，靠位置说话，不靠文字解释。 */
+.char-body { display: grid; gap: 6px;
+  grid-template-columns: minmax(0, 1fr) 106px minmax(0, 1fr);
+  grid-template-areas:
+    "role   role  role"
+    "hair   doll  face"
+    "outfit doll  gear"
+    "action action action"; }
+.char-body > .doll { grid-area: doll; }
+.char-body > .part[data-key="role"] { grid-area: role; }
+.char-body > .part[data-key="hair"] { grid-area: hair; }
+.char-body > .part[data-key="face"] { grid-area: face; }
+.char-body > .part[data-key="outfit"] { grid-area: outfit; }
+.char-body > .part[data-key="gear"] { grid-area: gear; }
+.char-body > .part[data-key="action"] { grid-area: action; }
 
-.char-stats { display: flex; flex-direction: column; gap: 2px; min-width: 0; justify-content: center; }
-.stat-row { display: flex; align-items: center; gap: 6px; width: 100%; border: 0;
-  background: transparent; padding: 3px 4px; border-radius: 5px; font-size: 12px;
-  text-align: left; min-width: 0; }
-.stat-row:hover { background: var(--surface-2); }
-.stat-row.open { outline: 1.5px solid var(--primary); background: var(--surface-2); }
+.part { position: relative; display: flex; flex-direction: column; justify-content: center;
+  gap: 1px; min-height: 46px; padding: 5px 8px; border-radius: 8px; min-width: 0;
+  border: 1px dashed var(--line); background: var(--surface); text-align: left; color: var(--text); }
+.part:hover { border-color: var(--primary); }
+.part-k { display: flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--muted);
+  white-space: nowrap; }
+.part-v { font-size: 11.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.part.m-locked { border: 1.5px solid var(--primary); background: var(--primary-soft); }
+.part.m-locked .part-k { color: var(--primary); }
+.part.m-locked .part-v { font-weight: 500; }
+.part.m-random .part-v { color: var(--muted); }
+.part.m-off { opacity: .5; }
+.part.open { border-style: solid; border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-soft); }
+/* 角色条：横过来当铭牌，和下面六个部位格区分开 */
+.part.side-role { flex-direction: row; align-items: center; gap: 8px; min-height: 0;
+  padding: 4px 9px; }
+.part.side-role .part-k { min-width: 34px; flex: none; }
+.part.side-role .part-v { flex: 1; font-size: 12px; }
+/* 连到小人身上的虚线：左列向右、右列向左，一眼看出这一格管哪块 */
+.part.side-l::after, .part.side-r::after { content: ''; position: absolute; top: 50%;
+  width: 6px; border-top: 1px dashed var(--line); }
+.part.side-l::after { right: -6px; }
+.part.side-r::after { left: -6px; }
+.part.m-locked.side-l::after, .part.m-locked.side-r::after { border-top-color: var(--primary); }
+
+/* 物品 ↔ 部位 双向指认：指到格子，身上对应那块亮；指到身上，格子亮。
+   纯 CSS 的 :has()，不加事件、不重绘，纯粹让人对上号。 */
+.char-body:has(.part[data-key="role"]:hover) .doll-zone { stroke: var(--primary); stroke-width: 2.4; }
+.char-body:has(.part[data-key="hair"]:hover) .doll-zone[data-key="hair"],
+.char-body:has(.part[data-key="face"]:hover) .doll-zone[data-key="face"],
+.char-body:has(.part[data-key="outfit"]:hover) .doll-zone[data-key="outfit"],
+.char-body:has(.part[data-key="gear"]:hover) .doll-zone[data-key="gear"],
+.char-body:has(.part[data-key="action"]:hover) .doll-zone[data-key="action"] {
+  stroke: var(--primary); stroke-width: 2.6; }
+.char-body:has(.doll-zone[data-key="hair"]:hover) .part[data-key="hair"],
+.char-body:has(.doll-zone[data-key="face"]:hover) .part[data-key="face"],
+.char-body:has(.doll-zone[data-key="outfit"]:hover) .part[data-key="outfit"],
+.char-body:has(.doll-zone[data-key="gear"]:hover) .part[data-key="gear"],
+.char-body:has(.doll-zone[data-key="action"]:hover) .part[data-key="action"] {
+  border-color: var(--primary); }
+.stage-grid:has(.part[data-key="background"]:hover) .doll-zone[data-key="background"],
+.stage-grid:has(.part[data-key="style"]:hover) .doll-zone[data-key="style"],
+.stage-grid:has(.part[data-key="composition"]:hover) .doll-zone[data-key="composition"] {
+  stroke: var(--primary); stroke-width: 3; }
+.stage-grid:has(.doll-zone[data-key="background"]:hover) .part[data-key="background"],
+.stage-grid:has(.doll-zone[data-key="style"]:hover) .part[data-key="style"],
+.stage-grid:has(.doll-zone[data-key="composition"]:hover) .part[data-key="composition"] {
+  border-color: var(--primary); }
+
+/* 虚线小人本体：三态写在身上 —— 随机虚线、锁定实线加底、关闭只留底稿 */
+.doll { position: relative; border-radius: 9px; overflow: hidden; min-height: 118px;
+  border: 1px solid var(--line);
+  background: radial-gradient(130% 90% at 50% 0%, #f8fafd, #edf1f8);
+  display: flex; align-items: center; justify-content: center; }
+.doll-svg { display: block; width: 100%; height: 100%; }
+/* 小人占满整个方框，立绘按钮垫在它下面：点图形 = 换那一格，点空白/照片 = 看历史图 */
+.doll-person .doll-svg { position: absolute; inset: 0; z-index: 1; }
+/* 线宽不随缩放变粗：小人被拉大时描边还是 1.6px，不然会糊成一团 */
+.doll-svg * { vector-effect: non-scaling-stroke; }
+.doll-art { position: absolute; inset: 0; z-index: 0; border: 0; padding: 0;
+  background: transparent; cursor: pointer; overflow: hidden; }
+.doll-art img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 20%;
+  display: block; opacity: .92; }
+.doll-cap { position: absolute; left: 3px; bottom: 3px; font-size: 9px; line-height: 1.6;
+  padding: 0 4px; border-radius: 4px; background: rgba(20, 30, 60, .55); color: #fff; }
+.doll.has-art { background: #eef1f7; }
+/* 有立绘时描边要压在照片上：换成白色，否则灰线在乱背景里看不清 */
+.doll.has-art .doll-zone { stroke: rgba(255, 255, 255, .92); }
+.doll.has-art .doll-zone.m-locked { stroke: #fff; stroke-width: 2.8; }
+.doll.has-art .doll-body, .doll.has-art .doll-deco { stroke: rgba(255, 255, 255, .55); }
+/* 亮色立绘上白线会糊掉，加一层极淡的投影保证可读 */
+.doll.has-art .doll-svg { filter: drop-shadow(0 0 1px rgba(15, 22, 40, .55)); }
+.doll.is-empty { min-height: 128px; opacity: .8; }
+
+/* 底稿 = 默认的虚线人形。三个默认关闭的槽位不再另外画线，靠它保持身体完整 */
+.doll-body, .doll-base { fill: none; stroke: #bcc6d8; stroke-width: 1.5;
+  stroke-dasharray: 3 3; stroke-linejoin: round; pointer-events: none; }
+.doll-zone { fill: none; stroke: #8d99b3; stroke-width: 1.7; stroke-dasharray: 3 3;
+  stroke-linejoin: round; pointer-events: all; transition: stroke .15s, fill .15s; }
+.doll-zone .area { fill: transparent; }
+.doll-zone .hit { stroke: transparent; stroke-width: 13; stroke-dasharray: none; }
+.doll-zone.m-locked { stroke: var(--primary); stroke-width: 2.1; stroke-dasharray: none; }
+.doll-zone.m-locked .area { fill: var(--primary-soft); fill-opacity: .6; }
+/* 关闭的槽位不另画线，露出一层底稿即可：身体轮廓不会被抠掉一块 */
+.doll-zone.m-off { stroke: transparent; }
+.doll-zone:hover { stroke: var(--primary); stroke-width: 2.4; }
+.doll-zone:hover .area { fill: var(--primary-soft); fill-opacity: .4; }
+.doll-zone.frame { pointer-events: stroke; }
+.doll-deco { fill: none; stroke: #d3d9e6; stroke-width: 1.1; stroke-dasharray: 2 3;
+  pointer-events: none; }
+.doll-deco.thirds { stroke-dasharray: 1 4; opacity: .8; }
+.stage-svg .frame-rect { stroke-width: 3.4; }
+
+/* 场景页签：同一套「点哪儿改哪儿」，画框里点画面 = 背景，点色点 = 画风，点框 = 构图 */
+.stage-grid { display: grid; gap: 6px; grid-template-columns: 1fr 1fr;
+  grid-template-areas: "bg style" "stage stage" "comp comp"; }
+.stage-grid > .doll { grid-area: stage; min-height: 0; }
+.stage-grid > .doll .doll-svg { height: auto; }
+.stage-grid > .part[data-key="background"] { grid-area: bg; }
+.stage-grid > .part[data-key="style"] { grid-area: style; }
+.stage-grid > .part[data-key="composition"] { grid-area: comp; }
+
+.asm-empty { display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 8px 0 10px; }
+.asm-empty .doll { width: 116px; }
+.asm-empty .hint { margin: 0; text-align: center; }
+
 .stat-dot { width: 5px; height: 5px; border-radius: 50%; background: #c3c9d6; flex: none; }
-.stat-row.m-locked .stat-dot { background: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
-.stat-row.m-off .stat-dot { background: transparent; border: 1px solid #cfd5e2; }
-.stat-k { color: var(--muted); font-size: 11px; width: 28px; flex: none; }
-.stat-v { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stat-row.m-random .stat-v { color: var(--muted); }
-.stat-row.m-off .stat-v { color: #a8b0c0; }
-.stat-row.m-locked { background: var(--primary-soft); }
-.stat-row.m-locked .stat-v { font-weight: 500; }
+.part.m-locked .stat-dot { background: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
+.part.m-off .stat-dot { background: transparent; border: 1px solid #cfd5e2; }
 
 /* ---- 游戏化：任务卡（一抽 = 一张任务）---- */
 .quest { position: relative; background: var(--surface); border: 1px solid var(--line);
@@ -398,4 +487,10 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
 @media (max-width: 1080px) {
   .draw-shell { grid-template-columns: 1fr; }
   .draw-side { position: static; max-height: none; overflow: visible; }
+}
+
+/* 手机上小人再窄一点，否则两侧格子只剩 70px，锁定的条目名全被截断 */
+@media (max-width: 420px) {
+  .char-body { grid-template-columns: minmax(0, 1fr) 84px minmax(0, 1fr); }
+  .doll-person { min-height: 104px; }
 }

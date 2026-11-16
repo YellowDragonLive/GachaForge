@@ -502,6 +502,98 @@ export function assemblyIsEmpty(assembly) {
   return assemblyToDefinition(assembly).slots.length === 0;
 }
 
+// ---------------- 线稿小人：物品(prompt) → 人物部位 ----------------
+// 一行字的「发型 随机」看不出它管的是哪儿，所以把槽位直接画到身体上：
+// 点头发 = 换发型，点脸 = 换表情，点身体 = 换衣着，点手臂 = 换装备，点腿 = 换动作。
+// 三态用线型表达：随机 = 虚线，锁定 = 实线加底色，关闭 = 淡到几乎看不见。
+
+const modeOf = (cfg) => {
+  const c = cfg && typeof cfg === 'object' ? cfg : {};
+  return SLOT_MODES.includes(c.mode) ? c.mode : 'random';
+};
+
+/** 身体部位 → 槽位 key。顺序即渲染顺序（头 → 身体 → 四肢），重叠时后者盖前者。 */
+export const DOLL_PARTS = [
+  { key: 'face', label: '表情', part: '脸' },
+  { key: 'hair', label: '发型', part: '头发' },
+  { key: 'outfit', label: '衣着', part: '身体' },
+  { key: 'gear', label: '装备', part: '手臂' },
+  { key: 'action', label: '动作', part: '腿' },
+];
+
+/**
+ * 人物线稿（SVG 字符串）：每个部位带 data-act="asm-open" + data-key，
+ * 点身体部位和点那一格是同一个动作。ghost=true 时不挂事件，只当空状态占位。
+ * 注意 stroke/fill 由 CSS 的 .doll-zone 统一控制，这里只出结构。
+ */
+export function dollFigureHtml(slots, opts = {}) {
+  const s = slots && typeof slots === 'object' ? slots : {};
+  const o = opts && typeof opts === 'object' ? opts : {};
+  const uid = Number(o.uid) || 0;
+  const ghost = !!o.ghost || !uid;
+  const male = o.gender === 'male';
+  const zone = (key, body) => {
+    const d = DOLL_PARTS.find((z) => z.key === key) || { key, label: key, part: '' };
+    const hook = ghost ? ''
+      : ` data-act="asm-open" data-scope="person" data-uid="${uid}" data-key="${key}"`;
+    return `<g class="doll-zone m-${modeOf(s[key])}"${hook}>`
+      + `<title>${esc(d.label)} · 点${esc(d.part)}也能换</title>${body}</g>`;
+  };
+  // 男/女两套轮廓：腰线一收一放，只为一眼看出「这是个人」而不是图标。
+  const torso = male ? 'M35 38 H57 L60 82 H32 Z' : 'M34 38 H58 L66 82 H26 Z';
+  const legs = male ? 'M41 82 L38 110 M51 82 L54 110' : 'M40 82 L36 110 M52 82 L56 110';
+  // 底稿：始终画一具完整的身体，槽位关掉时也不至于变成「一坨虚线」。
+  const body = `<path d="M30 20 a16 16 0 0 1 32 0"/>`
+    + `<circle class="area" cx="46" cy="20" r="12"/>`
+    + `<path class="area" d="${torso}"/>`
+    + '<path d="M34 40 L24 68 M58 40 L68 68"/>'
+    + '<circle cx="24" cy="71" r="2.8"/><circle cx="68" cy="71" r="2.8"/>'
+    + `<path d="${legs}"/>`;
+  return `<svg class="doll-svg${ghost ? ' is-ghost' : ''}" viewBox="0 0 92 118" aria-hidden="true">
+    <path class="doll-deco" d="M25 114 H67"/>
+    <path class="doll-deco" d="M46 33 V38"/>
+    <g class="doll-body">${body}</g>
+    ${zone('face', '<circle class="area" cx="46" cy="20" r="12"/>')}
+    ${zone('hair', '<path class="hit" d="M30 20 a16 16 0 0 1 32 0"/>'
+      + '<path d="M30 20 a16 16 0 0 1 32 0"/>')}
+    ${zone('outfit', `<path class="area" d="${torso}"/>`)}
+    ${zone('gear', '<path class="hit" d="M34 40 L24 68 M58 40 L68 68"/>'
+      + '<path d="M34 40 L24 68 M58 40 L68 68"/>'
+      + '<circle cx="24" cy="71" r="2.8"/><circle cx="68" cy="71" r="2.8"/>')}
+    ${zone('action', `<path class="hit" d="${legs}"/><path d="${legs}"/>`)}
+  </svg>`;
+}
+
+/**
+ * 场景线稿：一块虚线画框。背景 = 整块画面（地平线/山/太阳是装饰），
+ * 画风 = 右下三枚色点，构图 = 画框本身（含三分线）。同样点哪儿改哪儿。
+ */
+export function sceneStageHtml(scene) {
+  const s = scene && typeof scene === 'object' ? scene : {};
+  const zone = (key, label, body, extra = '') =>
+    `<g class="doll-zone${extra ? ' ' + extra : ''} m-${modeOf(s[key])}"`
+    + ` data-act="asm-open" data-scope="scene" data-key="${key}">`
+    + `<title>${esc(label)}</title>${body}</g>`;
+  return `<svg class="doll-svg stage-svg" viewBox="0 0 160 96" aria-hidden="true">
+    ${zone('background', '背景 · 点画面也能换', '<rect class="area" x="3" y="3" width="154" height="90" rx="6"/>')}
+    <rect class="doll-base" x="3" y="3" width="154" height="90" rx="6"/>
+    <g class="doll-deco">
+      <path d="M3 64 H157"/>
+      <path d="M3 64 L44 32 L74 64"/><path d="M68 64 L98 40 L126 64"/>
+      <circle cx="130" cy="22" r="8"/>
+    </g>
+    <g class="doll-deco thirds">
+      <path d="M54.3 3 V93 M105.7 3 V93 M3 33 H157"/>
+    </g>
+    ${zone('style', '画风 · 点色点也能换',
+      '<path class="hit" d="M108 80 H152"/>'
+      + '<circle cx="116" cy="80" r="5"/><circle cx="132" cy="80" r="5"/>'
+      + '<circle cx="148" cy="80" r="5"/>')}
+    ${zone('composition', '构图 · 点画框也能换',
+      '<rect class="frame-rect" x="3" y="3" width="154" height="90" rx="6"/>', 'frame')}
+  </svg>`;
+}
+
 // ---------------- 状态栏立绘：从锁定的条目反查概念封面 ----------------
 // 概念的 key 是英文 tag 的小写形式（`signora (genshin impact)`），而条目的 label
 // 是中文（`希格诺拉 (原神)`）。所以立绘必须走 tags，不能用 label。

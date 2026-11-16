@@ -541,9 +541,10 @@ const cases = [
   ['任务卡与状态栏：app.js 接线', () => {
     const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
-    for (const needle of ['char-portrait', 'data-portrait', 'loadPortraits', 'asm-portrait',
+    for (const needle of ['doll-art', 'data-portrait', 'loadPortraits', 'asm-portrait',
+      'dollFigureHtml', 'sceneStageHtml', 'part-k', 'part-v',
       'questState', 'quest-badge', 'quest-flag', 'quest-loadout', 'quest-foot',
-      'data-flag-for', 'stat-row']) {
+      'data-flag-for']) {
       assert.ok(app.includes(needle) || css.includes(needle), `缺少接线：${needle}`);
     }
     // 徽标与描边要跟着状态走，否则卡片头尾说法不一致
@@ -553,6 +554,60 @@ const cases = [
       '立绘必须异步补，不能阻塞面板渲染');
     assert.match(css, /\.quest\[data-status="running"\]\s*\.bar\s*>\s*i/,
       '生成中要有条纹进度条');
+  }],
+  ['线稿小人：部位槽位对齐身体、三态写在身上', () => {
+    const p = W.makePerson(7, 'female');
+    p.slots.hair = { kind: '发型', mode: 'locked', pick: 'silver hair', tags: 'silver hair' };
+    p.slots.action = { kind: '动作', mode: 'off', pick: '', tags: '' };
+    const html = W.dollFigureHtml(p.slots, { uid: 7, gender: 'female' });
+    assert.match(html, /<svg class="doll-svg"/, '必须是内联 SVG，不能是图片');
+    for (const key of ['face', 'hair', 'outfit', 'gear', 'action']) {
+      assert.ok(html.includes(`data-key="${key}"`), `缺少部位：${key}`);
+    }
+    assert.equal((html.match(/data-act="asm-open"/g) || []).length, 5,
+      '五个部位都要能点开对应那格');
+    assert.equal((html.match(/data-scope="person"/g) || []).length, 5);
+    assert.match(html, /class="doll-zone m-locked"[^>]*data-key="hair"/, '锁定要画成实线');
+    assert.match(html, /class="doll-zone m-off"[^>]*data-key="action"/, '关闭要淡出');
+    assert.match(html, /class="doll-zone m-random"[^>]*data-key="outfit"/, '默认是随机虚线');
+    assert.ok(html.includes('data-uid="7"'), '部位点击要带上人物 uid');
+    // 空状态：0 张人物卡也要有个虚线小人，但不能可点（没有可改的对象）
+    const ghost = W.dollFigureHtml({}, { ghost: true });
+    assert.ok(ghost.includes('is-ghost'));
+    assert.ok(!ghost.includes('data-act'), '占位小人不能挂点击事件');
+    assert.match(ghost, /m-random/, '占位小人保持虚线轮廓');
+    // 男/女轮廓不同，才看得出这是个人
+    assert.notEqual(W.dollFigureHtml(p.slots, { uid: 1, gender: 'male' }),
+      W.dollFigureHtml(p.slots, { uid: 1, gender: 'female' }));
+  }],
+  ['场景线稿：点画面/色点/画框分别对应背景画风构图', () => {
+    const scene = W.makeScene();
+    scene.background = { kind: '背景', mode: 'locked', pick: 'flower field', tags: '' };
+    scene.composition = { kind: '构图', mode: 'off', pick: '', tags: '' };
+    const html = W.sceneStageHtml(scene);
+    for (const key of ['background', 'style', 'composition']) {
+      assert.ok(html.includes(`data-key="${key}"`), `场景缺少区域：${key}`);
+    }
+    assert.equal((html.match(/data-scope="scene"/g) || []).length, 3);
+    assert.match(html, /class="doll-zone m-locked"[^>]*data-key="background"/);
+    assert.match(html, /class="doll-zone frame m-off"/, '画框就是构图那一格');
+    assert.match(html, /class="doll-zone m-random"[^>]*data-key="style"/);
+    assert.ok(html.includes('thirds'), '构图要有三分线做提示');
+    assert.ok(!html.includes('data-act="asm-open" data-scope="person"'), '场景不能误挂人物 scope');
+  }],
+  ['部位版面：格子与身体位置的对应关系写在 CSS 里', () => {
+    const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
+    assert.match(css, /grid-template-areas:\s*"role\s+role\s+role"\s*"hair\s+doll\s+face"/,
+      '必须按身体位置排版：角色在头顶、发型/表情贴头');
+    assert.match(css, /"outfit\s+doll\s+gear"/, '衣着/装备放在身体两侧');
+    assert.match(css, /"action\s+action\s+action"/, '动作横在脚下');
+    for (const key of ['role', 'hair', 'face', 'outfit', 'gear', 'action']) {
+      assert.ok(css.includes(`.part[data-key="${key}"]`), `缺少部位落位：${key}`);
+    }
+    assert.match(css, /\.doll-zone\s*\{[^}]*stroke-dasharray/, '随机状态必须是虚线');
+    assert.match(css, /\.doll-zone\.m-locked\s*\{[^}]*stroke-dasharray:\s*none/,
+      '锁定要变成实线');
+    assert.match(css, /\.part\.side-l::after/, '左列要有连到小人的虚线');
   }],
 ];
 
