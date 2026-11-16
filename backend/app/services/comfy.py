@@ -78,14 +78,22 @@ class ComfyClient:
     def schedulers(self) -> list[str]:
         return self._enum("KSampler", "scheduler")
 
+    # Anima / Qwen 分支要单独填 CLIP 与 VAE 文件名，手写极易打错（少个下划线就
+    # 报 node_errors），所以和 checkpoint / LoRA 一样从 /object_info 枚举出来喂补全。
+    def vaes(self) -> list[str]:
+        return self._enum("VAELoader", "vae_name")
+
+    def clips(self) -> list[str]:
+        return self._enum("CLIPLoader", "clip_name")
+
     def models(self) -> dict:
         if self.s.comfy_mock:
             return {"checkpoints": ["waiIllustriousSDXL_v170.safetensors"],
                     "loras": [], "samplers": ["euler_ancestral", "euler", "dpmpp_2m"],
-                    "schedulers": ["normal", "karras"], "mock": True}
+                    "schedulers": ["normal", "karras"], "vae": [], "clip": [], "mock": True}
         return {"checkpoints": self.checkpoints(), "loras": self.loras(),
                 "samplers": self.samplers(), "schedulers": self.schedulers(),
-                "mock": False}
+                "vae": self.vaes(), "clip": self.clips(), "mock": False}
 
     # ---------- workflow ----------
     def build_workflow(self, *, profile: dict, prompt: str, negative: str,
