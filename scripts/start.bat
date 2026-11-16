@@ -55,13 +55,58 @@ if not exist "%PYDEPS%\onnxruntime" (
 )
 if exist "%PYDEPS%\onnxruntime" set "PYTHONPATH=%PYDEPS%;%PYTHONPATH%"
 
-"%PY%" -c "import sys;sys.path.insert(0,'.');import httpx;from backend.app.config import get_settings;s=get_settings();sys.exit(0 if httpx.get(s.comfy_url+'/system_stats',timeout=2).status_code==200 else 1)" >nul 2>&1
-if errorlevel 1 (
-  echo [start] ComfyUI is offline - switching to MOCK mode - placeholder images
-  set GACHA_COMFY_MOCK=1
-) else (
-  echo [start] ComfyUI online - real generation mode
-)
+REM ---- ComfyUI: probe, and autostart the portable build when it is down ------
+REM One double-click should bring up the whole stack. If 8188 is already
+REM answering we reuse it; otherwise we launch the portable build in its own
+REM window and wait for /system_stats before touching the DB, so the gacha
+REM server always starts in real mode when the weights are actually there.
+REM   GACHA_COMFY_AUTO=0  -> skip autostart, keep the old "offline => mock"
+REM   GACHA_COMFY_DIR=... -> point at another ComfyUI portable folder
+if not defined COMFY_DIR set "COMFY_DIR=%GACHA_COMFY_DIR%"
+if not defined COMFY_DIR set "COMFY_DIR=X:\ai_tool\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable"
+
+call :probe_comfy
+if not errorlevel 1 goto :comfy_ready
+if "%GACHA_COMFY_AUTO%"=="0" goto :comfy_checked
+if not exist "%COMFY_DIR%\run_nvidia_gpu.bat" goto :comfy_noinstall
+
+REM Hint only - never set GACHA_COMFY_URL here, that would override .env
+set "COMFY_HINT=%GACHA_COMFY_URL%"
+if not defined COMFY_HINT set "COMFY_HINT=http://127.0.0.1:8188"
+echo [start] ComfyUI is offline - launching it from %COMFY_DIR%
+echo [start] A separate ComfyUI window will open and stay open - that is expected.
+start "ComfyUI" /D "%COMFY_DIR%" "%COMFY_DIR%\run_nvidia_gpu.bat"
+
+set /a COMFY_TRIES=0
+:comfy_wait
+"%SystemRoot%\System32\ping.exe" -n 3 127.0.0.1 >nul
+call :probe_comfy
+if not errorlevel 1 goto :comfy_ready
+set /a COMFY_TRIES+=1
+if !COMFY_TRIES! GEQ 60 goto :comfy_timeout
+echo [start] waiting for ComfyUI at !COMFY_HINT! - !COMFY_TRIES!/60
+goto :comfy_wait
+
+:comfy_timeout
+echo [start] ComfyUI did not answer after ~5 min. Check the ComfyUI window for
+echo [start] errors - usually a missing checkpoint or a stale Nvidia driver.
+echo [start] Continuing in MOCK mode - placeholder images.
+set "GACHA_COMFY_MOCK=1"
+goto :comfy_checked
+
+:comfy_noinstall
+echo [start] ComfyUI is offline and no portable build was found at:
+echo [start]   %COMFY_DIR%
+echo [start] Set GACHA_COMFY_DIR to your ComfyUI folder, or set
+echo [start] GACHA_COMFY_AUTO=0 to silence this. Continuing in MOCK mode.
+set "GACHA_COMFY_MOCK=1"
+goto :comfy_checked
+
+:comfy_ready
+echo [start] ComfyUI online - real generation mode
+goto :comfy_checked
+
+:comfy_checked
 
 "%PY%" scripts\init_db.py || goto :fail
 "%PY%" scripts\migrate_legacy.py --if-empty || goto :fail
@@ -76,3 +121,14 @@ goto :eof
 :fail
 echo [start] FAILED. See the error above.
 pause
+goto :eof
+
+REM ---- helpers ---------------------------------------------------------------
+REM Reachability check lives in scripts/probe_comfy.py: it reads comfy_url from
+REM the backend config (so a custom GACHA_COMFY_URL in .env is honoured) and
+REM falls back to 127.0.0.1:8188, so a broken config can never make us launch a
+REM second ComfyUI on the same port. exit code 0 = up, 1 = down.
+:probe_comfy
+"%PY%" scripts\probe_comfy.py >nul 2>&1
+if errorlevel 1 exit /b 1
+exit /b 0
