@@ -40,3 +40,6 @@ vendor/
 # 虚拟环境
 .venv/
 venv/
+
+# UI 截图验收产物（node scripts/ui_shot.mjs）
+temp/
