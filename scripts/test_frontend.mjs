@@ -431,6 +431,78 @@ const cases = [
     assert.match(app, /function paintStars\(id, rating\)/, '缺少星级局部更新');
     assert.match(app, /ratingStarsHtml\(im\.id, im\.rating\)/, '画廊未接五星');
   }],
+  ['装配：人数由人物卡张数推导', () => {
+    const f = (n, g) => ({ uid: n, gender: g, slots: {} });
+    assert.equal(W.countTagsFor([]), 'no humans', '0 人必须是无人物');
+    assert.equal(W.countTagsFor([f(1, 'female')]), '1girl');
+    assert.equal(W.countTagsFor([f(1, 'male')]), '1boy');
+    assert.equal(W.countTagsFor([f(1, 'female'), f(2, 'female')]), '2girls');
+    assert.equal(W.countTagsFor([f(1, 'male'), f(2, 'male')]), '2boys');
+    assert.equal(W.countTagsFor([f(1, 'female'), f(2, 'male')]), '1girl, 1boy');
+    const three = W.countTagsFor([f(1, 'female'), f(2, 'female'), f(3, 'male')]);
+    assert.match(three, /multiple girls/, '3 人以上要带 multiple');
+    assert.doesNotMatch(three, /solo/, '人数标签里不能出现 solo');
+  }],
+  ['装配：编译成配方定义（关闭不产生槽位、锁定带 pick）', () => {
+    const p = W.makePerson(1, 'female');
+    p.slots.role = { kind: '角色', mode: 'locked', pick: 'artoria pendragon' };
+    p.slots.outfit = { kind: '服装', mode: 'off', pick: '' };
+    p.slots.gear = { kind: '物品', mode: 'random', pick: '' };
+    const scene = W.makeScene();
+    scene.background = { kind: '背景', mode: 'locked', pick: 'flower field' };
+    scene.style = { kind: '风格', mode: 'off', pick: '' };
+    const def = W.assemblyToDefinition({ people: [p], scene });
+    assert.equal(def.count_tags, '1girl');
+    assert.equal(def.fixed_head, 'masterpiece, best quality');
+    const pools = def.slots.map((s) => s.pool);
+    assert.ok(!pools.includes('服装'), '关闭的格子不能产生槽位');
+    assert.ok(!pools.includes('风格'), '关闭的场景格不能产生槽位');
+    assert.deepEqual(pools.slice(0, 1), ['背景'], '场景排在人物之前');
+    const role = def.slots.find((s) => s.pool === '角色');
+    assert.equal(role.pick, 'artoria pendragon', '锁定必须带 pick');
+    const gear = def.slots.find((s) => s.pool === '物品');
+    assert.equal(gear.pick, undefined, '随机格不能带 pick，否则永远是同一件');
+    assert.ok(!JSON.stringify(def).includes('"mode"'), 'mode 是前端状态，不能漏进后端定义');
+    const fresh = W.assemblyToDefinition({ people: [W.makePerson(9)], scene: W.makeScene() });
+    const freshPools = fresh.slots.map((s) => s.pool);
+    assert.ok(!freshPools.includes('物品'),
+      '装备默认关闭：物品池混着食物厨具，随机只会拉低质量');
+    assert.ok(freshPools.includes('角色') && freshPools.includes('服装'),
+      '角色与衣着默认参与随机');
+  }],
+  ['装配：两人各自独立、全关判定为空', () => {
+    const a = W.makePerson(1, 'female');
+    a.slots.role = { kind: '角色', mode: 'locked', pick: 'artoria' };
+    const b = W.makePerson(2, 'male');
+    b.slots.role = { kind: '角色', mode: 'random', pick: '' };
+    const scene = W.makeScene();
+    W.SCENE_SLOTS.forEach((d) => { scene[d.key].mode = 'off'; });
+    Object.keys(a.slots).forEach((k) => { if (k !== 'role') a.slots[k].mode = 'off'; });
+    Object.keys(b.slots).forEach((k) => { if (k !== 'role') b.slots[k].mode = 'off'; });
+    const def = W.assemblyToDefinition({ people: [a, b], scene });
+    assert.equal(def.slots.length, 2, '两人各一个角色槽位');
+    assert.equal(def.slots[0].pick, 'artoria', '第一人锁定');
+    assert.equal(def.slots[1].pick, undefined, '第二人随机');
+    assert.equal(def.count_tags, '1girl, 1boy');
+    const empty = { people: [], scene: W.makeScene() };
+    W.SCENE_SLOTS.forEach((d) => { empty.scene[d.key].mode = 'off'; });
+    assert.equal(W.assemblyIsEmpty(empty), true, '全关应判定为空，回落到配方路径');
+    assert.equal(W.assemblyIsEmpty({ people: [], scene: W.makeScene() }), false,
+      '场景有内容就不算空');
+  }],
+  ['装配：app.js 接线与提交优先级', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    for (const needle of ['asm-tab', 'asm-add', 'asm-del', 'asm-copy', 'asm-gender',
+      'asm-open', 'asm-mode', 'asm-pick', 'asm-close', 'asm-pool', 'asm-q',
+      'assemblyPanelHtml', 'asmLoadEntries', '/api/pools/items']) {
+      assert.ok(app.includes(needle), `装配面板缺少接线：${needle}`);
+    }
+    assert.match(app, /const useAssembly = !assemblyIsEmpty\(state\.assembly\)/,
+      '提交时必须先判断装配是否有内容');
+    assert.match(app, /recipe_id: useAssembly \? null :/, '装配优先，不能被配方覆盖');
+    assert.match(app, /filter: useAssembly \? '' :/, '装配模式下不能再叠全局过滤');
+    assert.match(app, /data-scope="scene"/, '场景格与人物格要用 scope 区分');
+  }],
 ];
 
 for (const [name, fn] of cases) {

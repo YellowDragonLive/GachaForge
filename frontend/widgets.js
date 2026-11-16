@@ -402,3 +402,98 @@ export function conceptDetailHtml(d) {
     <div class="concept-grid">${tiles || '<div class="hint">这个概念还没有出过图</div>'}</div>
   </div>`;
 }
+
+// ---------------- 装配面板：场景 / 人物 → 配方定义 ----------------
+// 人数不再是一个开关，而是「人物卡的张数」：0 张无人、1 张单人、N 张多人。
+// 每张卡是一份独立的单人配置，所以「多人」永远不会出现两人共用一套衣服的错乱。
+
+/** 人物的六个格子。off = 这格不参与；random = 每抽重摇；locked = 固定到 pick。 */
+export const PERSON_SLOTS = [
+  { key: 'role', label: '角色', kind: '角色', fallback: 'random' },
+  { key: 'hair', label: '发型', kind: '发型', fallback: 'random' },
+  { key: 'face', label: '表情', kind: '表情', fallback: 'off' },
+  { key: 'outfit', label: '衣着', kind: '服装', fallback: 'random' },
+  // 物品类下 69 个池混着食物/厨具（sausage、oven mitts），默认随机只会拉低出图质量，
+  // 所以默认关闭：想要装备就点开，搜 sword / hat / glasses 这类具体词。
+  { key: 'gear', label: '装备', kind: '物品', fallback: 'off' },
+  { key: 'action', label: '动作', kind: '动作', fallback: 'off' },
+];
+
+/** 场景的三格：全局生效，不属于任何一个角色。 */
+export const SCENE_SLOTS = [
+  { key: 'background', label: '背景', kind: '背景', fallback: 'random' },
+  { key: 'style', label: '画风', kind: '风格', fallback: 'random' },
+  { key: 'composition', label: '构图', kind: '构图', fallback: 'off' },
+];
+
+export const SLOT_MODES = ['random', 'locked', 'off'];
+
+/** 一张新的人物卡：默认全是「随机」，只有表情/动作默认关掉，避免 prompt 膨胀。 */
+export function makePerson(uid, gender = 'female') {
+  const slots = {};
+  for (const d of PERSON_SLOTS) {
+    slots[d.key] = { kind: d.kind, mode: d.fallback, pick: '' };
+  }
+  return { uid, gender, slots };
+}
+
+/** 场景默认值。 */
+export function makeScene() {
+  const scene = {};
+  for (const d of SCENE_SLOTS) {
+    scene[d.key] = { kind: d.kind, mode: d.fallback, pick: '' };
+  }
+  return scene;
+}
+
+/**
+ * 人数标签：由人物卡张数与各自的性别推导，不再依赖角色条目自带的 1girl。
+ * 0 人 → no humans；2 人同性别 → 2girls；混合 → 1girl, 1boy。
+ */
+export function countTagsFor(people) {
+  const list = Array.isArray(people) ? people.filter(Boolean) : [];
+  if (!list.length) return 'no humans';
+  const girls = list.filter((p) => p.gender === 'female').length;
+  const boys = list.filter((p) => p.gender === 'male').length;
+  const others = list.length - girls - boys;
+  const parts = [];
+  if (girls) parts.push(girls === 1 ? '1girl' : `${girls}girls`);
+  if (boys) parts.push(boys === 1 ? '1boy' : `${boys}boys`);
+  if (others) parts.push(others === 1 ? '1other' : `${others}others`);
+  if (list.length >= 3) {
+    if (girls >= boys && girls >= others) parts.push('multiple girls');
+    else if (boys >= others) parts.push('multiple boys');
+    else parts.push('multiple others');
+  }
+  return parts.join(', ') || '1girl';
+}
+
+/**
+ * 装配状态 → 后端可执行的配方定义。
+ * 顺序：场景（背景/画风/构图）→ 人物 1 的六格 → 人物 2 的六格 …
+ * 这样 prompt 里同一角色的装扮挨在一起，不会和别人的混着。
+ */
+export function assemblyToDefinition(assembly) {
+  const a = assembly && typeof assembly === 'object' ? assembly : {};
+  const scene = a.scene && typeof a.scene === 'object' ? a.scene : {};
+  const people = Array.isArray(a.people) ? a.people.filter(Boolean) : [];
+  const slots = [];
+  const push = (cfg) => {
+    if (!cfg || cfg.mode === 'off') return;
+    const slot = { pool: cfg.kind || '', count: 1, weight: 1 };
+    if (cfg.mode === 'locked' && cfg.pick) slot.pick = cfg.pick;
+    slots.push(slot);
+  };
+  SCENE_SLOTS.forEach((d) => push(scene[d.key]));
+  people.forEach((p) => PERSON_SLOTS.forEach((d) => push(p.slots && p.slots[d.key])));
+  return {
+    fixed_head: 'masterpiece, best quality',
+    count_tags: countTagsFor(people),
+    slots,
+  };
+}
+
+/** 装配是否真的有内容：全关 = 不算，避免把空定义发给后端。 */
+export function assemblyIsEmpty(assembly) {
+  return assemblyToDefinition(assembly).slots.length === 0;
+}

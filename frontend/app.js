@@ -8,6 +8,8 @@ import {
   normalizeSlots, slotRowsHtml, slotPoolOptionsHtml,
   conceptCardsHtml, conceptKindChipsHtml, semanticCardsHtml, conceptStripHtml,
   coverPopoverHtml, conceptDetailHtml, ratingStarsHtml,
+  PERSON_SLOTS, SCENE_SLOTS, makePerson, makeScene, countTagsFor,
+  assemblyToDefinition, assemblyIsEmpty,
 } from './widgets.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -15,6 +17,8 @@ const view = $('#view');
 const num = (v, d) => (v === '' || v === undefined || v === null ? d : Number(v));
 const LAST_SESSION_KEY = 'gacha_last_session';
 const FORM_KEY = 'gacha_draw_form';
+const ASM_KEY = 'gacha_assembly';
+let asmTimer = null;
 
 const state = {
   recipes: [], profiles: [], pools: [], batches: [], jobs: [], images: [],
@@ -25,7 +29,17 @@ const state = {
   // 参数预设就地编辑：高频调参不再占一个一级页面
   tuning: false, tuneDraft: null,
   gallery: { favorite: '', origin: '', min_rating: 0 },
-  // 抽卡台表单值集中保存：重绘 / 切视图 / 刷新都不再丢失用户的选择
+  // 装配面板：人数 = 人物卡片张数，0 张即无人。默认单人全随机，和原来的「抽一张」等价。
+  assembly: {
+    enabled: true,          // false = 改用配方模式（保留原有能力）
+    tab: 'people',          // 'people' | 'scene'
+    people: [makePerson(1)],
+    scene: makeScene(),
+    nextUid: 2,
+    picking: null,          // {uid, key}：正在为哪一格的哪个人物挑条目（null 表示未展开）
+    entries: [], entriesTotal: 0, entriesLoading: false,
+    pickerPool: '', pickerQ: '',
+  },
   form: { recipe_id: '', pulls: 3, count: 1, seed: '', filter: '',
     gen_profile_id: '', filterMode: 'pool' },
   // 可选控件的编辑态：过滤构造器 / LoRA 列表 / 配方槽位表
@@ -102,35 +116,40 @@ function drawForm() {
   return `<div class="draw-shell">
     <aside class="draw-side">
     <div class="panel">
-      <div class="panel-head"><h2>抽卡设置</h2><span class="sub">${state.pools.length} 个卡池</span></div>
-      <div class="field"><span>配方</span><select id="dRecipe"><option value="" ${sel('', f.recipe_id)}>（不用配方 · 全池随机）</option>${recipeOpts}</select></div>
-      <div class="row" style="margin-top:10px">
+      <div class="panel-head"><h2>装配</h2>
+        <span class="sub">${asmSummaryText()}</span></div>
+      ${assemblyPanelHtml()}
+      <details class="asm-alternate">
+        <summary>改用配方抽卡 · 保留原有配方与过滤</summary>
+        <div class="field" style="margin-top:10px"><span>配方</span><select id="dRecipe"><option value="" ${sel('', f.recipe_id)}>（不用配方 · 全池随机）</option>${recipeOpts}</select></div>
+        <div class="field picker" style="margin-top:12px">
+          <span>过滤 · 点选即可，无需打字</span>
+          <div class="filter-tabs">
+            <button type="button" class="chip hot${mode === 'pool' ? ' on' : ''}"
+              data-act="filter-mode" data-v="pool">按池 / tag</button>
+            <button type="button" class="chip hot${mode === 'concept' ? ' on' : ''}"
+              data-act="filter-mode" data-v="concept">看图选概念</button>
+            <button type="button" class="chip hot${mode === 'feel' ? ' on' : ''}"
+              data-act="filter-mode" data-v="feel">一句话找画师</button>
+          </div>
+          ${filterPaneHtml(mode)}
+          <div class="filter-chips" id="filterChips">${filterChipsHtml(f.filter)}</div>
+          <div id="filterHintBox">${filterHintBoxHtml()}</div>
+          <div class="row" style="margin-top:6px">
+            <button class="btn small" data-act="filter-clear">清空条件</button>
+            <span class="hint">已选条件在上方，点 × 删除</span>
+          </div>
+          <details class="advanced">
+            <summary>高级：手动编辑过滤表达式 / 查看当前值</summary>
+            <input type="text" id="dFilter" value="${esc(f.filter)}" placeholder="留空 = 全部卡池">
+            <div class="hint">写法：<code>角色:fate</code> 只筛角色池；裸 <code>fate</code> 会筛掉所有不含它的池（画师/动作槽位可能变空）。大小写不敏感。填了过滤会<b>临时覆盖</b>配方槽位里的 filter；留空才按槽位 filter 抽。</div>
+          </details>
+        </div>
+      </details>
+      <div class="row" style="margin-top:12px">
         <div class="field"><span>连抽数</span><input type="number" id="dPulls" value="${esc(f.pulls)}" min="1" max="50"></div>
-        <div class="field"><span>每池条数</span><input type="number" id="dCount" value="${esc(f.count)}" min="1" max="20"></div>
         <div class="field"><span>种子</span><input type="number" id="dSeed" value="${esc(f.seed)}" placeholder="留空随机"></div>
-      </div>
-      <div class="field picker" style="margin-top:14px">
-        <span>过滤 · 点选即可，无需打字</span>
-        <div class="filter-tabs">
-          <button type="button" class="chip hot${mode === 'pool' ? ' on' : ''}"
-            data-act="filter-mode" data-v="pool">按池 / tag</button>
-          <button type="button" class="chip hot${mode === 'concept' ? ' on' : ''}"
-            data-act="filter-mode" data-v="concept">看图选概念</button>
-          <button type="button" class="chip hot${mode === 'feel' ? ' on' : ''}"
-            data-act="filter-mode" data-v="feel">一句话找画师</button>
-        </div>
-        ${filterPaneHtml(mode)}
-        <div class="filter-chips" id="filterChips">${filterChipsHtml(f.filter)}</div>
-        <div id="filterHintBox">${filterHintBoxHtml()}</div>
-        <div class="row" style="margin-top:6px">
-          <button class="btn small" data-act="filter-clear">清空条件</button>
-          <span class="hint">已选条件在上方，点 × 删除</span>
-        </div>
-        <details class="advanced">
-          <summary>高级：手动编辑过滤表达式 / 查看当前值</summary>
-          <input type="text" id="dFilter" value="${esc(f.filter)}" placeholder="留空 = 全部卡池">
-          <div class="hint">写法：<code>角色:fate</code> 只筛角色池；裸 <code>fate</code> 会筛掉所有不含它的池（画师/动作槽位可能变空）。大小写不敏感。填了过滤会<b>临时覆盖</b>配方槽位里的 filter；留空才按槽位 filter 抽。</div>
-        </details>
+        <input type="hidden" id="dCount" value="1">
       </div>
       <div class="field" style="margin-top:10px"><span>生成参数预设</span>
         <div class="row">
@@ -147,7 +166,7 @@ function drawForm() {
         <button class="btn small" data-act="gen-all" ${state.draws.length ? '' : 'disabled'}>本批全部生图</button>
         ${state.draws.length ? '<button class="btn small" data-act="draw-clear">清空结果</button>' : ''}
       </div>
-      <p class="hint" style="margin-bottom:0">同种子可复现；生图进度直接显示在结果卡片上，不用切页面去看队列。</p>
+      <p class="hint" style="margin-bottom:0">人数 = 人物卡张数；锁定的格子每抽都不变，随机格每次重摇。同种子可复现。</p>
     </div>
     </aside>
     <section class="draw-main">
@@ -159,6 +178,209 @@ function drawForm() {
         `<div class="panel"><div class="loading">调好参数后点「抽卡并生图」，抽到的图和生成进度都会出现在这里。</div></div>`}
     </section>
   </div>`;
+}
+
+// ---------------- 装配面板：场景 / 人物 ----------------
+// 人数是「人物卡的张数」，不是开关：删卡就少一个人，0 张就是纯场景图。
+
+function asmSummaryText() {
+  const a = state.assembly;
+  const n = a.people.length;
+  if (!n) return '纯场景 · 无人物';
+  return `${n} 人 · ${countTagsFor(a.people)}`;
+}
+
+function assemblyPanelHtml() {
+  const a = state.assembly;
+  const tab = a.tab === 'scene' ? 'scene' : 'people';
+  return `<div class="asm">
+    <div class="asm-tabs">
+      <button type="button" class="asm-tab${tab === 'scene' ? ' on' : ''}"
+        data-act="asm-tab" data-v="scene">场景</button>
+      <button type="button" class="asm-tab${tab === 'people' ? ' on' : ''}"
+        data-act="asm-tab" data-v="people">人物 · ${a.people.length}</button>
+    </div>
+    <div class="asm-body">${tab === 'scene' ? asmSceneHtml() : asmPeopleHtml()}</div>
+  </div>`;
+}
+
+function asmSceneHtml() {
+  const scene = state.assembly.scene;
+  const cells = SCENE_SLOTS.map((d) => asmCellHtml(scene[d.key], {
+    label: d.label, scope: 'scene', key: d.key,
+    open: state.assembly.picking && state.assembly.picking.scope === 'scene'
+      && state.assembly.picking.key === d.key,
+  })).join('');
+  return `<div class="asm-grid">${cells}</div>
+    <p class="hint" style="margin:8px 0 0">画风对所有人物统一生效。场景全关 = 白底纯人物。</p>`;
+}
+
+function asmPeopleHtml() {
+  const a = state.assembly;
+  const cards = a.people.map((p, i) => asmPersonCard(p, i)).join('');
+  const tip = a.people.length ? ''
+    : '<p class="hint" style="margin:8px 0 0">0 个人物 = 纯场景图，prompt 里会写 no humans。</p>';
+  return `${cards}
+    <button type="button" class="asm-add" data-act="asm-add">＋ 添加人物</button>${tip}`;
+}
+
+function asmPersonCard(p, idx) {
+  const a = state.assembly;
+  const picking = a.picking && a.picking.scope === 'person' && a.picking.uid === p.uid
+    ? a.picking.key : null;
+  const cells = PERSON_SLOTS.map((d) => asmCellHtml(p.slots[d.key], {
+    label: d.label, scope: 'person', uid: p.uid, key: d.key, open: picking === d.key,
+  })).join('');
+  const g = p.gender || 'female';
+  const gBtn = (v, t) => `<button type="button" class="${g === v ? 'on' : ''}"
+    data-act="asm-gender" data-uid="${p.uid}" data-v="${v}">${t}</button>`;
+  return `<div class="asm-card${picking ? ' picking' : ''}">
+    <div class="asm-card-head">
+      <b>人物 ${idx + 1}</b>
+      <span class="asm-gender">${gBtn('female', '女')}${gBtn('male', '男')}${gBtn('other', '其他')}</span>
+      <span class="asm-card-ops">
+        <button type="button" data-act="asm-copy" data-uid="${p.uid}">复制</button>
+        <button type="button" data-act="asm-del" data-uid="${p.uid}">移除</button>
+      </span>
+    </div>
+    <div class="asm-grid">${cells}</div>
+    ${picking ? asmPickerHtml(picking) : ''}
+  </div>`;
+}
+
+function asmCellHtml(cfg, { label, scope, uid, key, open }) {
+  const c = cfg || { mode: 'off', pick: '', kind: '' };
+  const mode = c.mode || 'random';
+  const val = mode === 'locked' ? (c.pick || '已锁定') : (mode === 'off' ? '关闭' : '随机');
+  const attrs = scope === 'scene'
+    ? `data-scope="scene" data-key="${key}"`
+    : `data-scope="person" data-uid="${uid}" data-key="${key}"`;
+  return `<button type="button" class="asm-cell m-${mode}${open ? ' open' : ''}"
+    data-act="asm-open" ${attrs} title="${esc(val)}">
+    <span class="asm-cell-k">${esc(label)}</span>
+    <span class="asm-cell-v">${esc(cut(val, 12))}</span>
+  </button>`;
+}
+
+function asmEntriesHtml() {
+  const a = state.assembly;
+  if (a.entriesLoading) return '<div class="hint">加载中…</div>';
+  const rows = (a.entries || []).map((e) => `<button type="button" class="asm-entry"
+      data-act="asm-pick" data-label="${esc(e.label)}" title="${esc(e.tags || '')}">
+      <span class="asm-entry-label">${esc(cut(e.label, 42))}</span>
+      <span class="asm-entry-pool">${esc(cut(e.pool, 16))}</span>
+    </button>`).join('');
+  return rows || '<div class="hint">没有匹配条目：换个词，或把池切到「全部」再试</div>';
+}
+
+function asmCountHtml() {
+  const a = state.assembly;
+  return `共 ${a.entriesTotal || 0} 条${a.entriesTotal > 60 ? ' · 只显示前 60 条，用搜索缩小' : ''}`;
+}
+
+function asmPickerHtml(key) {
+  const a = state.assembly;
+  const def = [...SCENE_SLOTS, ...PERSON_SLOTS].find((d) => d.key === key);
+  const kind = def ? def.kind : '';
+  const cfg = asmCurrentCfg();
+  return `<div class="asm-picker">
+    <div class="row">
+      <button type="button" class="chip${cfg && cfg.mode === 'random' ? ' on' : ''}"
+        data-act="asm-mode" data-v="random">随机</button>
+      <button type="button" class="chip${cfg && cfg.mode === 'off' ? ' on' : ''}"
+        data-act="asm-mode" data-v="off">关闭</button>
+      <span class="hint" style="flex:1">点条目即固定，之后每抽都不变</span>
+      <button type="button" class="btn small" data-act="asm-close">收起</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <select class="asm-pool" data-act="asm-pool">${asmPoolOptionsHtml(kind, a.pickerPool)}</select>
+      <input type="text" class="asm-q" data-act="asm-q" value="${esc(a.pickerQ)}"
+        placeholder="搜条目（多为英文，如 shirt / flower）">
+    </div>
+    <div class="asm-entries">${asmEntriesHtml()}</div>
+    <div class="hint asm-count">${asmCountHtml()}</div>
+  </div>`;
+}
+
+function asmPoolOptionsHtml(kind, current) {
+  const pools = state.pools.filter((p) => String(p.kind || '') === String(kind || ''));
+  const opts = [`<option value="">全部 ${pools.length} 池</option>`];
+  pools.forEach((p) => {
+    opts.push(`<option value="${esc(p.name)}"${p.name === current ? ' selected' : ''}>${esc(p.name)}</option>`);
+  });
+  return opts.join('');
+}
+
+function asmCurrentCfg() {
+  const pk = state.assembly.picking;
+  if (!pk) return null;
+  if (pk.scope === 'scene') return state.assembly.scene[pk.key];
+  const p = state.assembly.people.find((x) => x.uid === pk.uid);
+  return p ? p.slots[pk.key] : null;
+}
+
+/** 打开某一格的选择器：先按该格类别拉一批条目（空 q = 前 60 条）。 */
+async function asmOpenPicker(scope, uid, key) {
+  const a = state.assembly;
+  a.picking = { scope, uid, key };
+  a.entries = []; a.entriesTotal = 0; a.pickerPool = ''; a.pickerQ = '';
+  await renderDraw();
+  await asmLoadEntries();
+}
+
+async function asmLoadEntries() {
+  const a = state.assembly;
+  if (!a.picking) return;
+  const def = [...SCENE_SLOTS, ...PERSON_SLOTS].find((d) => d.key === a.picking.key);
+  const kind = def ? def.kind : '';
+  a.entriesLoading = true;
+  const box = $('.asm-entries');
+  if (box) box.innerHTML = '<div class="hint">加载中…</div>';
+  try {
+    const qs = new URLSearchParams({ kind, limit: 60 });
+    if (a.pickerQ) qs.set('q', a.pickerQ);
+    if (a.pickerPool) qs.set('pool', a.pickerPool);
+    const data = await api.get('/api/pools/items?' + qs.toString());
+    a.entries = data.items || [];
+    a.entriesTotal = data.total || 0;
+  } catch (err) {
+    a.entries = []; a.entriesTotal = 0;
+    if (box) box.innerHTML = `<div class="hint err-text">条目加载失败：${esc(friendlyError(err))}</div>`;
+  } finally {
+    a.entriesLoading = false;
+  }
+  // 只更新列表与计数，不重建输入框：否则打字时每次都失焦
+  if (box) box.innerHTML = asmEntriesHtml();
+  const cnt = $('.asm-count');
+  if (cnt) cnt.textContent = asmCountHtml();
+}
+
+/** 改某一格的状态（随机 / 关闭），并收起选择器。 */
+async function asmSetMode(mode) {
+  const cfg = asmCurrentCfg();
+  if (!cfg) return;
+  cfg.mode = mode;
+  state.assembly.picking = null;
+  await renderDraw();
+}
+
+/** 锁定到具体条目。锁角色时顺手按条目里的人数 tag 校正性别，避免 1girl + 男角色的冲突。 */
+async function asmPick(label) {
+  const cfg = asmCurrentCfg();
+  if (!cfg) return;
+  const pk = state.assembly.picking;
+  cfg.mode = 'locked';
+  cfg.pick = String(label || '');
+  if (pk && pk.scope === 'person' && pk.key === 'role') {
+    const p = state.assembly.people.find((x) => x.uid === pk.uid);
+    const low = String(label || '').toLowerCase();
+    if (p) {
+      if (/\b1boy\b|\bboys?\b|\bmale\b/.test(low)) p.gender = 'male';
+      else if (/\b\d*girls?\b|\bfemale\b/.test(low)) p.gender = 'female';
+    }
+  }
+  state.assembly.picking = null;
+  await renderDraw();
 }
 
 /** 过滤的两种「看起来生效其实没有」的情况，输入时就地提示，不必等抽完。 */
@@ -678,7 +900,33 @@ async function refreshDrawStates(ids) {
   if (state.route === 'draw') list.forEach(updateDrawCard);
 }
 
-async function renderDraw() { view.innerHTML = drawForm(); }
+async function renderDraw() { saveAssembly(); view.innerHTML = drawForm(); }
+
+/** 装配状态随抽卡台一起持久化：刷新 / 切视图回来不用重配一遍两个人物。 */
+function saveAssembly() {
+  const a = state.assembly;
+  try {
+    sessionStorage.setItem(ASM_KEY, JSON.stringify({
+      people: a.people, scene: a.scene, nextUid: a.nextUid, tab: a.tab,
+    }));
+  } catch (_) { /* 配额满或隐私模式：装配只是丢一次配置，不影响抽卡 */ }
+}
+
+function restoreAssembly() {
+  try {
+    const raw = sessionStorage.getItem(ASM_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (!saved || !Array.isArray(saved.people)) return;
+    const people = saved.people.filter((p) => p && p.uid && p.slots);
+    state.assembly.people = people;
+    // 用 makeScene() 打底再合并：老版本存的场景可能缺格，缺的按默认补上
+    state.assembly.scene = { ...makeScene(), ...(saved.scene || {}) };
+    state.assembly.nextUid = Number(saved.nextUid)
+      || (people.reduce((m, p) => Math.max(m, Number(p.uid) || 0), 0) + 1);
+    state.assembly.tab = saved.tab === 'scene' ? 'scene' : 'people';
+  } catch (_) { /* 坏数据忽略，用默认单人 */ }
+}
 
 /** 刷新页面后恢复上一批抽卡结果（只读回显，不产生新数据）。
  *  优先用上次记录的会话；旧版前端没记录过，就回退到库里最近一批。
@@ -711,12 +959,17 @@ async function restoreLastDraw() {
 async function doDraw({ generate = false } = {}) {
   readDrawForm();
   const f = state.form;
+  // 装配优先：只要面板上有任何一格不是「关闭」，就用装配编译出的定义，
+  // 此时忽略配方与过滤——两者同时生效会互相筛，静默变空最难排查。
+  const useAssembly = !assemblyIsEmpty(state.assembly);
+  const def = useAssembly ? assemblyToDefinition(state.assembly) : null;
   const body = {
-    recipe_id: num(f.recipe_id, null),
+    recipe_id: useAssembly ? null : num(f.recipe_id, null),
+    definition: def,
     pulls: num(f.pulls, 3),
-    count: num(f.count, 1),
+    count: 1,
     seed: num(f.seed, null),
-    filter: String(f.filter || '').trim(),
+    filter: useAssembly ? '' : String(f.filter || '').trim(),
     gen_profile_id: num(f.gen_profile_id, null),
   };
   const data = await api.post('/api/draw-sessions', body);
@@ -1057,6 +1310,46 @@ async function onClick(e) {
     switch (act) {
       case 'draw-and-gen': await doDraw({ generate: true }); break;
       case 'draw': await doDraw(); break;
+      // --- 装配面板：场景 / 人物。人数 = 人物卡张数 ---
+      case 'asm-tab': state.assembly.tab = btn.dataset.v; await renderDraw(); break;
+      case 'asm-add': {
+        const a = state.assembly;
+        a.people.push(makePerson(a.nextUid++));
+        a.tab = 'people';
+        await renderDraw();
+        break;
+      }
+      case 'asm-del': {
+        const a = state.assembly;
+        a.people = a.people.filter((p) => p.uid !== Number(btn.dataset.uid));
+        a.picking = null;
+        await renderDraw();
+        break;
+      }
+      case 'asm-copy': {
+        const a = state.assembly;
+        const src = a.people.find((p) => p.uid === Number(btn.dataset.uid));
+        if (src) {
+          const clone = makePerson(a.nextUid++, src.gender);
+          clone.slots = JSON.parse(JSON.stringify(src.slots));
+          a.people.push(clone);
+        }
+        await renderDraw();
+        break;
+      }
+      case 'asm-gender': {
+        const p = state.assembly.people.find((x) => x.uid === Number(btn.dataset.uid));
+        if (p) p.gender = btn.dataset.v;
+        await renderDraw();
+        break;
+      }
+      case 'asm-open':
+        await asmOpenPicker(btn.dataset.scope, Number(btn.dataset.uid) || undefined,
+          btn.dataset.key);
+        break;
+      case 'asm-close': state.assembly.picking = null; await renderDraw(); break;
+      case 'asm-mode': await asmSetMode(btn.dataset.v); break;
+      case 'asm-pick': await asmPick(btn.dataset.label); break;
       // --- 过滤构造器：三种输入方式共用一条表达式，全程点选 ---
       case 'filter-mode': await setFilterMode(btn.dataset.v); break;
       case 'tune-open': await openTuning(); break;
@@ -1331,6 +1624,13 @@ async function onRoute() {
 
 function onInput(e) {
   const t = e.target;
+  if (t.dataset && t.dataset.act === 'asm-q') {
+    // 装配选择器的搜索：防抖后只刷新条目列表，不动输入框本身
+    state.assembly.pickerQ = t.value;
+    clearTimeout(asmTimer);
+    asmTimer = setTimeout(() => asmLoadEntries(), 280);
+    return;
+  }
   if (['dRecipe', 'dPulls', 'dCount', 'dSeed', 'dFilter', 'dProfile'].includes(t.id)) {
     readDrawForm();
   }
@@ -1367,6 +1667,11 @@ function onInput(e) {
 
 function onChange(e) {
   const t = e.target;
+  if (t.dataset && t.dataset.act === 'asm-pool') {
+    state.assembly.pickerPool = t.value;
+    asmLoadEntries();
+    return;
+  }
   if (t.id === 'gFav' || t.id === 'gOrigin' || t.id === 'gRating') {
     state.gallery = {
       favorite: $('#gFav').value, origin: $('#gOrigin').value,
@@ -1454,6 +1759,7 @@ async function boot() {
   });
   try {
     restoreForm();
+    restoreAssembly();
     await refreshBase();
     // 首次进入默认给最常用的「角色」类别，避免点热门 tag 时生成裸关键字触发全局过滤；
     // 用户明确选过「全部卡池」后存的是 ''，不会被这里覆盖。
