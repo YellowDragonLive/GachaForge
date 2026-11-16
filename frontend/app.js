@@ -1919,6 +1919,11 @@ async function onClick(e) {
         setFilterSpec(''); syncConceptPanel(); break;
       case 'fix-recipe': await addFilterToRecipe(); break;
       // --- 通用概念缩略图：点图即选，沿用已有过滤构造器 ---
+      case 'concept-open':
+        // 不可过滤的概念卡：点整卡进详情页（概念名本就有 #/concept/<key> 链接，
+        // 之前这里缺 case，点了整卡没反应——靠链接侥幸掩盖了）。
+        location.hash = '#/concept/' + encodeURIComponent(btn.dataset.key || '');
+        break;
       case 'concept-pick':
         setFilterSpec(addFilter(state.form.filter, btn.dataset.pool || '', btn.dataset.v));
         syncConceptPanel();
@@ -1986,10 +1991,6 @@ async function onClick(e) {
       }
       case 'semantic-go':
         await loadSemantics($('#semanticQ')?.value.trim() || ''); break;
-      case 'semantic-clear': {
-        const el = $('#semanticQ'); if (el) el.value = '';
-        await loadSemantics(''); break;
-      }
       case 'semantic-pick':
         setFilterSpec(addFilter(state.form.filter, '画师', btn.dataset.v));
         syncConceptPanel();

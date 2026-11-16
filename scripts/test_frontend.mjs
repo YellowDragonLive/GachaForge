@@ -867,6 +867,21 @@ const cases = [
     const api = readFileSync(new URL('../backend/app/api/semantics.py', import.meta.url), 'utf8');
     assert.match(api, /@router\.get\("\/artist-thumb"\)/);
   }],
+  ['data-act 契约：widgets 输出的动作必须有 handler（防死动作漂移）', () => {
+    const w = readFileSync(new URL('../frontend/widgets.js', import.meta.url), 'utf8');
+    const a = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const emitted = new Set([...w.matchAll(/data-act="([a-z-]+)"/g)].map((m) => m[1]));
+    const handled = new Set([...a.matchAll(/case '([a-z-]+)':/g)].map((m) => m[1]));
+    const orphans = [...emitted].filter((x) => !handled.has(x));
+    assert.deepEqual(orphans, [],
+      `widgets 输出但 app.js 无 handler 的死动作: ${orphans.join(', ')}`);
+    // 反方向：app.js 有 case 但没有任何模板输出，也是死代码
+    const dead = [...handled].filter((x) =>
+      !emitted.has(x) && !a.includes(`data-act="${x}"`) && !w.includes(`data-act="${x}"`));
+    // 有些动作是动态拼出来的（如 asm-pick），只警告明显拼错的
+    assert.ok(!dead.includes('semantic-clear'), 'semantic-clear 已无任何发射方，应删');
+    assert.ok(handled.has('concept-open'), '不可过滤概念卡点的 concept-open 必须有 case');
+  }],
 ];
 
 for (const [name, fn] of cases) {
