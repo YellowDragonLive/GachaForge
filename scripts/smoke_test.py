@@ -107,19 +107,22 @@ def check(name: str, cond: bool, detail: str = "") -> None:
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f" - {detail}" if detail else ""))
 
 
-def legacy_algorithm_match() -> tuple[bool, str]:
-    """新 core 与旧 gacha.py 在同一 JSON、同一 seed 下应给出完全相同的抽取结果。"""
-    import gacha as legacy
+def draw_deterministic() -> tuple[bool, str]:
+    """同一 seed 必须抽出完全一样的结果，换 seed 必须不同。
+
+    旧 gacha.py 已随旧实现一起删除，原先「新旧实现逐项比对」的用例随之取消；
+    这里守的是行为契约本身 —— 种子复现是这个工具的核心承诺，与实现语言无关。
+    """
     from backend.app.core.pools import discover_pools, draw_pull
 
     fp = ROOT / "zh_TW.json"
     data = json.loads(fp.read_text(encoding="utf-8-sig"))
-    new_pools = discover_pools(data, str(fp), "zh_TW")
-    old_pools = legacy.load_pools(str(fp))
-    a = draw_pull(random.Random(2026), new_pools, 2, False, {}, all_pools=new_pools)
-    b = legacy.draw_pull(random.Random(2026), old_pools, 2, False, {}, all_pools=old_pools)
-    sig = lambda c: [(x["label"], x["tags"]) for x in c]  # noqa: E731
-    return sig(a) == sig(b), f"{len(a)} 条条目比对"
+    pools = discover_pools(data, str(fp), "zh_TW")
+    sig = lambda cs: [(x["label"], tuple(x["tags"])) for x in cs]  # noqa: E731
+    a = sig(draw_pull(random.Random(2026), pools, 2, False, {}, all_pools=pools))
+    b = sig(draw_pull(random.Random(2026), pools, 2, False, {}, all_pools=pools))
+    c = sig(draw_pull(random.Random(2027), pools, 2, False, {}, all_pools=pools))
+    return len(a) == 2 and a == b and a != c, f"{len(a)} 条，同 seed 一致 / 换 seed 不同"
 
 
 def frontend_contract() -> tuple[bool, str]:
@@ -150,8 +153,8 @@ def wait_job(c: TestClient, job_id: int, timeout: float = 12.0) -> dict:
 
 def main() -> int:
     print("== 抽卡工作台冒烟测试（mock 模式） ==")
-    ok_legacy, note = legacy_algorithm_match()
-    check("旧抽卡算法一致性", ok_legacy, note)
+    ok_legacy, note = draw_deterministic()
+    check("抽卡种子复现（同 seed 一致）", ok_legacy, note)
     ok_fe, note_fe = frontend_contract()
     check("前端 detail 契约（Node）", ok_fe, note_fe)
 
