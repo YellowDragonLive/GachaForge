@@ -53,7 +53,8 @@ export function drawForm() {
           </div>
           <details class="advanced">
             <summary>高级：手动编辑过滤表达式 / 查看当前值</summary>
-            <input type="text" id="dFilter" value="${esc(f.filter)}" placeholder="留空 = 全部卡池">
+            <input type="text" id="dFilter" value="${esc(f.filter)}" placeholder="留空 = 全部卡池"
+              data-suggest="filter" data-suggest-append autocomplete="off" spellcheck="false">
             <div class="hint">写法：<code>角色:fate</code> 只筛角色池；裸 <code>fate</code> 会筛掉所有不含它的池（画师/动作槽位可能变空）。大小写不敏感。填了过滤会<b>临时覆盖</b>配方槽位里的 filter；留空才按槽位 filter 抽。</div>
           </details>
         </div>
@@ -117,7 +118,8 @@ export function tuningHtml() {
     `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
   return `<div class="tune-box">
     <div class="field"><span>保存为预设名</span>
-      <input type="text" id="tName" value="${esc(t.name || '默认参数')}"></div>
+      <input type="text" id="tName" value="${esc(t.name || '默认参数')}"
+        data-suggest="profile" autocomplete="off"></div>
     ${tuningWorkflowHtml(state, t.workflow)}
     ${modelExtraFields(state, t.workflow, t)}
     <div class="field" style="margin-top:8px"><span>checkpoint</span>

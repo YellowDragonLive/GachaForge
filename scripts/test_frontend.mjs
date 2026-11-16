@@ -926,6 +926,45 @@ const cases = [
     }
     assert.deepEqual(problems, [], `调用了但没有来源的函数：\n  ${problems.join('\n  ')}`);
   }],
+
+  ['输入补全契约：每个文本输入都有候选来源', () => {
+    // 口径：作为方便使用的工具，每个 input 都该能补全。静态扫所有 <input>，只放行四类：
+    //   data-suggest     通用补全（features/suggest.js），候选取自池/tag/模型/预设/历史目录
+    //   class="qf"       快速筛选框，输入即过滤（本身没有"候选"这回事）
+    //   data-filter-only 输入即过滤的搜索框（Vue computed），同上
+    //   data-free-text   自由描述（"想要的感觉"那种句子），候选只会碍事
+    //   data-secret      令牌/密钥，绝不该联想
+    // number / hidden / checkbox 一律跳过：数值补全不如直接敲。
+    const uncovered = [];
+    for (const f of jsFiles) {
+      const s = readFileSync(f, 'utf8');
+      for (const m of s.matchAll(/<input\b[^>]*>/g)) {
+        const tag = m[0];
+        const type = (tag.match(/type="(\w+)"/) || [])[1] || 'text';
+        if (!['text', 'search', 'url'].includes(type)) continue;
+        if (/data-suggest|data-filter-only|data-free-text|data-secret/.test(tag)) continue;
+        if (/class="[^"]*\bqf\b/.test(tag)) continue;
+        // 装配面板的条目搜索 / 意群自由词走各自老机制（跨池条目搜索、双语词表浮层）
+        if (/data-asm-pool-q|data-act="asm-q"|data-act="asm-extra"/.test(tag)) continue;
+        uncovered.push(`${f.split(/[\\/]/).pop()}: ${tag.replace(/\s+/g, ' ').slice(0, 92)}`);
+      }
+    }
+    assert.deepEqual(uncovered, [], `这些输入框没有候选来源：\n  ${uncovered.join('\n  ')}`);
+  }],
+
+  ['输入补全接线：每个 data-suggest 都指向存在的 provider', () => {
+    // 拼错 provider 名不会报错，只会静默不出候选 —— 这类"看起来能用"的坏接线最难查。
+    const sugPath = fileURLToPath(new URL('../frontend/features/suggest.js', import.meta.url));
+    const sug = readFileSync(sugPath, 'utf8');
+    const start = sug.indexOf('const PROVIDERS = {');
+    assert.ok(start > 0, 'suggest.js 里找不到 PROVIDERS 表');
+    const block = sug.slice(start, sug.indexOf('// 选中后要记住'));
+    const defined = new Set([...block.matchAll(/^\s{2}(\w+):/gm)].map((m) => m[1]));
+    const used = new Set([...frontendSrc().matchAll(/data-suggest="(\w+)"/g)].map((m) => m[1]));
+    const unknown = [...used].filter((k) => !defined.has(k));
+    assert.deepEqual(unknown, [], `data-suggest 指向了不存在的 provider：${unknown.join(', ')}`);
+    assert.ok(used.size >= 8, `挂上补全的输入框只有 ${used.size} 类，是不是把属性删了`);
+  }],
 ];
 
 for (const [name, fn] of cases) {

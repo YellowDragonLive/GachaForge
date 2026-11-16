@@ -93,7 +93,8 @@ export function filterPaneHtml(mode) {
     const c = state.concepts;
     const selectedKeys = parseFilterSpec(f.filter).map((r) => r.tag.toLowerCase());
     return `<div class="concept-bar">
-      <input type="text" id="conceptQ" value="${esc(c.q)}" placeholder="搜概念名（留空浏览）">
+      <input type="text" id="conceptQ" value="${esc(c.q)}" placeholder="搜概念名（留空浏览）"
+        data-suggest="concept" autocomplete="off">
       <button class="btn small" data-act="concept-refresh">刷新</button>
     </div>
     <div class="hot-tags" id="conceptKinds">${conceptKindChipsHtml(c.kinds, c.kind)}</div>
@@ -105,7 +106,7 @@ export function filterPaneHtml(mode) {
       `<button type="button" class="chip hot" data-act="feel-chip" data-v="${esc(x)}">${esc(x)}</button>`).join('');
     return `<div class="semantic-bar">
       <input type="text" id="semanticQ" value="${esc(state.semantics.q)}"
-        placeholder="想要的感觉：一句话描述画风">
+        data-free-text placeholder="想要的感觉：一句话描述画风">
       <button class="btn small primary" data-act="semantic-go">找画师</button>
     </div>
     <div class="hot-tags"><span class="hint">试着点一个：</span>${feels}</div>
@@ -123,7 +124,8 @@ export function filterPaneHtml(mode) {
     </div>
     <div class="row" style="margin-top:6px">
       <input type="text" id="dFilterTagQ" value="${esc(state.filterTagQ)}"
-        placeholder="找 tag：输入 2 个字自动联想" style="width:100%">
+        placeholder="找 tag：输入 2 个字自动联想" style="width:100%"
+        data-suggest="tag" autocomplete="off" spellcheck="false">
     </div>
     <div class="hot-tags"><span class="hint">热门 tag · 点一下就加：</span>
       <span id="hotTags">${hotTagChipsHtml(state.hotTags.slice(0, 12))}</span></div>`;

@@ -596,3 +596,22 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
 .part.is-free.m-locked { border-style: dashed; box-shadow: inset 0 0 0 2px var(--surface); }
 
 .vocab-suggest[hidden] { display: none; }
+
+/* ---------------- 通用输入补全浮层 ----------------
+   与缩略图浮层同一策略：挂 body + position:fixed，避开 overflow:auto 的裁剪。
+   z-index 比缩略图(60)高一层，补全永远在图片上面。 */
+.suggest-pop { position: fixed; z-index: 70; max-height: 264px; overflow: auto;
+  padding: 3px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: 0 10px 28px rgba(20, 30, 60, .18); }
+.suggest-pop[hidden] { display: none; }
+.suggest-group { position: sticky; top: 0; z-index: 1; padding: 5px 8px 3px;
+  font-size: 10.5px; font-weight: 500; color: var(--muted);
+  background: var(--surface-2); border-bottom: 1px solid var(--line); }
+.suggest-item { display: flex; align-items: baseline; gap: 10px; width: 100%;
+  border: 0; border-radius: 6px; background: transparent; padding: 5px 8px;
+  text-align: left; font-size: 12px; }
+.suggest-item.on, .suggest-item:hover { background: var(--primary-soft); }
+.suggest-val { color: var(--text); font-weight: 500; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.suggest-hint { margin-left: auto; color: var(--muted); font-size: 11px;
+  white-space: nowrap; }

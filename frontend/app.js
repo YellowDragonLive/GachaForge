@@ -5,6 +5,7 @@ import { state } from './store.js';
 import { restoreAssembly, asmSearchNow, asmQueryInput, asmPoolQInput, asmPoolChange } from './features/assembly.js';
 import { vocabInput, vocabKeydown, vocabBlur } from './features/vocab.js';
 import { onQuickFilterInput, onQuickFilterKey } from './features/quickfilter.js';
+import { suggestInput, suggestKey, suggestBlur, initSuggest } from './features/suggest.js';
 import { loadTagOptions, setFilterSpec, filterTagQInput } from './features/filter.js';
 import { renderPools } from './views/pools.js';
 import { renderRecipes } from './views/recipes.js';
@@ -44,6 +45,8 @@ function onKeydown(e) {
   const t = e.target;
   if (!t.dataset) return;
   if (t.dataset.qf) { onQuickFilterKey(t, e); return; }
+  // 补全浮层打开时先让它吃掉 ↑↓ / Enter / Esc，免得 Enter 同时触发抽卡之类的快捷键
+  if (t.dataset.suggest && suggestKey(t, e)) return;
   if (t.dataset.act === 'asm-q' && e.key === 'Enter') asmSearchNow(t);
   if (t.dataset.act === 'asm-extra') vocabKeydown(t, e);
 }
@@ -127,6 +130,8 @@ async function onClick(e) {
 function onInput(e) {
   const t = e.target;
   if (t.dataset && t.dataset.qf) { onQuickFilterInput(t); return; }
+  // 不 return：dFilter 这类输入框既要补全，也要同步回表单草稿
+  if (t.dataset && t.dataset.suggest) suggestInput(t);
   if (t.dataset && t.dataset.asmPoolQ !== undefined) { asmPoolQInput(t); return; }
   if (t.dataset && t.dataset.act === 'asm-q') { asmQueryInput(t); return; }
   if (t.dataset && t.dataset.act === 'asm-extra') { vocabInput(t); return; }
@@ -143,6 +148,7 @@ function onInput(e) {
 
 function onChange(e) {
   const t = e.target;
+  if (t.dataset && t.dataset.suggest) suggestBlur();
   if (t.dataset && t.dataset.act === 'asm-extra') { vocabBlur(); return; }
   if (t.dataset && t.dataset.act === 'asm-pool') { asmPoolChange(t); return; }
   if (t.id === 'dFilterPool') {
@@ -217,6 +223,7 @@ async function boot() {
   view.addEventListener('focusout', onThumbOut);
   // 列表一滚，fixed 浮层就与行错位了：直接收起，等下一次悬停
   window.addEventListener('scroll', hideThumbPop, true);
+  initSuggest();
   document.querySelectorAll('#nav button').forEach((b) =>
     b.addEventListener('click', () => { location.hash = '#' + b.dataset.view; }));
   window.addEventListener('hashchange', onRoute);

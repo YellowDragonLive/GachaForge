@@ -116,7 +116,7 @@ const SettingsView = defineComponent({
         <p class="hint" v-else>
           真实出图需要本机 ComfyUI 运行在 8188，且所选 checkpoint 在 /object_info 列表中。</p>
         <div class="field" style="margin-top:8px"><span>访问令牌（仅当 .env 设置 GACHA_TOKEN 时才需要）</span>
-          <div class="row"><input type="text" v-model="token" placeholder="留空 = 免登录" style="max-width:320px">
+          <div class="row"><input type="text" v-model="token" data-secret placeholder="留空 = 免登录" style="max-width:320px">
             <button class="btn small" @click="saveToken">保存令牌</button></div></div>
       </div>
 
@@ -133,7 +133,8 @@ const SettingsView = defineComponent({
           <button class="btn small danger" data-act="profile-del" :disabled="draft.id == null"
             :title="draft.name || ''">删除</button>
         </div>
-        <div class="field"><span>预设名</span><input type="text" v-model="draft.name"></div>
+        <div class="field"><span>预设名</span><input type="text" v-model="draft.name"
+          data-suggest="profile" autocomplete="off"></div>
 
         <div class="field" style="margin-top:8px"><span>Workflow · 不同模型走不同节点图</span>
           <select id="pWorkflow" v-model="draft.workflow" style="min-width:220px">
@@ -143,9 +144,11 @@ const SettingsView = defineComponent({
 
         <div class="row" style="margin-top:8px" v-if="anima">
           <div class="field"><span>CLIP 模型（Anima/Qwen）</span>
-            <input type="text" v-model="draft.clip" placeholder="qwen_3_06b_base.safetensors"></div>
+            <input type="text" v-model="draft.clip" placeholder="qwen_3_06b_base.safetensors"
+              data-suggest="clip" autocomplete="off" spellcheck="false"></div>
           <div class="field"><span>VAE 模型</span>
-            <input type="text" v-model="draft.vae" placeholder="qwen_image_vae.safetensors"></div>
+            <input type="text" v-model="draft.vae" placeholder="qwen_image_vae.safetensors"
+              data-suggest="vae" autocomplete="off" spellcheck="false"></div>
         </div>
 
         <div class="field" style="margin-top:8px"><span>Checkpoint · 点选，来自 ComfyUI /object_info</span>
@@ -159,7 +162,8 @@ const SettingsView = defineComponent({
             <span class="hint" data-qf-count="pCheckpoint"></span>
           </div>
           <details class="advanced"><summary>手动填写 ckpt 文件名（一般不需要）</summary>
-            <input type="text" v-model="draft.checkpointFree" placeholder="或手动填写 ckpt 文件名"></details></div>
+            <input type="text" v-model="draft.checkpointFree" placeholder="或手动填写 ckpt 文件名"
+              data-suggest="checkpoint" autocomplete="off" spellcheck="false"></details></div>
 
         <div class="row" style="margin-top:8px">
           <div class="field"><span>步数</span><input type="number" v-model.number="draft.steps"></div>
@@ -178,7 +182,8 @@ const SettingsView = defineComponent({
             </select></div>
         </div>
         <div class="field" style="margin-top:8px"><span>负向提示词</span>
-          <input type="text" v-model="draft.negative"></div>
+          <input type="text" v-model="draft.negative" data-suggest="neg"
+            data-suggest-append autocomplete="off" spellcheck="false"></div>
 
         <div class="field picker" style="margin-top:12px"><span>LoRA · 点选文件 + 调权重，无需写 JSON</span>
           <div class="row">

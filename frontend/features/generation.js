@@ -46,9 +46,11 @@ export function modelExtraFields(state, workflow, values = {}) {
   if (!hasModelExtras(state, workflow)) return '';
   return `<div class="row" style="margin-top:8px">
     <div class="field"><span>CLIP 模型（Anima/Qwen）</span>
-      <input type="text" id="tClip" value="${esc(values.clip || 'qwen_3_06b_base.safetensors')}"></div>
+      <input type="text" id="tClip" value="${esc(values.clip || 'qwen_3_06b_base.safetensors')}"
+        data-suggest="clip" autocomplete="off" spellcheck="false"></div>
     <div class="field"><span>VAE 模型</span>
-      <input type="text" id="tVae" value="${esc(values.vae || 'qwen_image_vae.safetensors')}"></div>
+      <input type="text" id="tVae" value="${esc(values.vae || 'qwen_image_vae.safetensors')}"
+        data-suggest="vae" autocomplete="off" spellcheck="false"></div>
   </div>`;
 }
 

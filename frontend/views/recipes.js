@@ -68,7 +68,8 @@ const RecipesView = defineComponent({
           </div></div>
 
         <div class="field"><span>配方名</span>
-          <input type="text" v-model="form.name" placeholder="如 角色 × 风格"></div>
+          <input type="text" v-model="form.name" placeholder="如 角色 × 风格"
+            data-suggest="recipe" autocomplete="off"></div>
 
         <div class="field" style="margin-top:8px"><span>固定头部（质量词 / 主体）</span>
           <textarea v-model="form.head" style="min-height:56px"></textarea></div>
@@ -92,16 +93,13 @@ const RecipesView = defineComponent({
             <label class="mini">权重
               <input type="number" v-model.number="s.weight" min="0" max="1" step="0.1"></label>
             <label class="mini">tag 过滤
-              <input type="text" v-model="s.filter" list="slotTagList"
-                placeholder="留空 = 不过滤，点开可选热门 tag"></label>
+              <input type="text" v-model="s.filter" data-suggest="tag"
+                placeholder="留空 = 不过滤，输入片段看候选"></label>
             <button type="button" class="btn small" @click="move(i, -1)" :disabled="i === 0">↑</button>
             <button type="button" class="btn small" @click="move(i, +1)" :disabled="i === slots.length - 1">↓</button>
             <button type="button" class="btn small danger" @click="remove(i)">移除</button>
           </div>
           <div class="hint" v-if="!slots.length">还没有槽位 · 点下方「＋ 添加槽位」，或展开高级模式粘贴 JSON</div>
-          <datalist id="slotTagList">
-            <option v-for="t in state.hotTags" :key="t.value" :value="t.value"></option>
-          </datalist>
           <div class="row" style="margin-top:8px">
             <button class="btn small" @click="add">＋ 添加槽位</button>
             <button class="btn small" data-act="slot-apply-json">读取下方 JSON</button></div>
@@ -130,7 +128,8 @@ const RecipesView = defineComponent({
           <textarea v-model="form.template" style="min-height:56px"></textarea></div>
 
         <div class="field" style="margin-top:8px"><span>固定尾部</span>
-          <input type="text" v-model="form.tail"></div>
+          <input type="text" v-model="form.tail" data-suggest="neg"
+            data-suggest-append autocomplete="off" spellcheck="false"></div>
 
         <div v-if="preview.length" style="margin-top:12px">
           <h3>预览</h3>

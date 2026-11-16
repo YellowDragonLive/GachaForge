@@ -10,6 +10,7 @@ import { state } from '../store.js';
 import { matchQuery, poolSearchText } from '../widgets.js';
 import { refresh } from '../core/router.js';
 import { $, done } from '../core/ui.js';
+import { noteDir } from '../features/suggest.js';
 import { computed, defineComponent, mountVue, ref } from '../vue/index.js';
 
 const pools = ref([]);
@@ -43,7 +44,7 @@ const PoolsView = defineComponent({
         <div class="panel-head"><h2>卡池</h2>
           <span class="sub">共 {{ pools.length }} 池 / {{ totalItems }} 条</span></div>
         <div class="row" style="margin-bottom:10px">
-          <input type="text" v-model="q" placeholder="搜索池名 / 类别" style="max-width:280px">
+          <input type="text" v-model="q" data-filter-only placeholder="搜索池名 / 类别" style="max-width:280px">
           <span class="hint">冷存池不参与抽卡，可手动启用</span>
           <span class="hint" v-if="q">命中 {{ filteredPools.length }} 池</span>
         </div>
@@ -69,7 +70,7 @@ const PoolsView = defineComponent({
         <div class="panel-head"><h3>条目预览（前 {{ filteredItems.length }} / {{ items.total }}）</h3>
           <button class="btn small" data-act="pool-close">关闭</button></div>
         <div class="row" style="margin-bottom:8px">
-          <input type="text" v-model="itemQ" placeholder="筛选条目：label / tags" style="max-width:999px">
+          <input type="text" v-model="itemQ" data-filter-only placeholder="筛选条目：label / tags" style="max-width:999px">
           <span class="hint">{{ filteredItems.length }} / {{ items.items.length }} 条</span></div>
         <div class="scroll">
           <div v-for="(i, idx) in filteredItems" :key="idx" class="chip"
@@ -81,7 +82,7 @@ const PoolsView = defineComponent({
       <div class="panel">
         <div class="panel-head"><h2>导入与批次</h2></div>
         <div class="row">
-          <input type="text" v-model="importPath" id="importPath"
+          <input type="text" v-model="importPath" id="importPath" data-suggest="dir"
             placeholder="项目内相对路径，如 vendor/.../wildcards 或 my_pool.json" style="max-width:460px">
           <button class="btn" data-act="import">导入</button></div>
         <p class="hint">支持 .json（任意结构）、.csv（中文名,英文 tag）、目录（每个 .txt 一个词卡池）。重复导入会自动跳过同名池。</p>
@@ -131,6 +132,7 @@ export const actions = {
     const r = await api.post('/api/pools/import', { path });
     state.pools = await api.get('/api/pools');
     state.batches = await api.get('/api/pools/batches');
+    noteDir(path);
     done(`导入完成：${r.pools} 池 / ${r.items} 条`); await refresh('pools');
   },
   'rollback': async (btn) => {

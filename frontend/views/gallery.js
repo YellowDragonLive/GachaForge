@@ -10,6 +10,7 @@ import { state } from '../store.js';
 import { ratingStarsHtml } from '../widgets.js';
 import { refresh } from '../core/router.js';
 import { $, done } from '../core/ui.js';
+import { noteDir } from '../features/suggest.js';
 import { defineComponent, mountVue, ref } from '../vue/index.js';
 
 const images = ref([]);
@@ -80,7 +81,7 @@ const GalleryView = defineComponent({
         </div>
       </div>
       <div class="panel"><div class="panel-head"><h2>并入历史画师图鉴</h2></div>
-        <div class="row"><input type="text" v-model="dir" id="galleryDir"
+        <div class="row"><input type="text" v-model="dir" id="galleryDir" data-suggest="dir"
             placeholder="项目内图片目录，如 artist_style_test_20260526" style="max-width:440px">
           <button class="btn" data-act="gallery-scan">扫描并注册</button></div>
         <p class="hint">只读扫描，不移动原图；注册后缩略图会显示在上方画廊。历史目录不存在时请先确认路径。</p>
@@ -128,6 +129,7 @@ export const actions = {
     const path = $('#galleryDir').value.trim();
     if (!path) throw new Error('请填写图片目录');
     const r = await api.post('/api/images/register-dir', { path });
+    noteDir(path);
     done(`注册完成：新增 ${r.added} 张`); await refresh('gallery');
   },
   'gallery-export': async () => {
