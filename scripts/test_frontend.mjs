@@ -609,6 +609,58 @@ const cases = [
       '锁定要变成实线');
     assert.match(css, /\.part\.side-l::after/, '左列要有连到小人的虚线');
   }],
+  ['池匹配：点哪个部位就先摆哪些池', () => {
+    const pools = [
+      { name: '组合预设/服装-女性简单穿搭', kind: '服装', item_count: 740 },
+      { name: '人物-衣服', kind: '服装', item_count: 190 },
+      { name: 'DanbooruTAG/audio_instruments_brass', kind: '服装', item_count: 9 },
+      { name: 'DanbooruTAG/panties_main', kind: '服装', item_count: 41 },
+      { name: '人文景观-建筑', kind: '背景', item_count: 88 },
+      { name: '自然景观-花卉', kind: '背景', item_count: 177 },
+      { name: 'wai_characters', kind: '角色', item_count: 5108 },
+      { name: '人物-类型', kind: '角色', item_count: 104 },
+    ];
+    const outfit = W.rankPools(pools, '服装', 'outfit').map((p) => p.name);
+    assert.equal(outfit[0], '组合预设/服装-女性简单穿搭', '衣着先给能穿的池');
+    assert.ok(outfit.indexOf('DanbooruTAG/audio_instruments_brass') > outfit.indexOf('DanbooruTAG/panties_main'),
+      '跑偏池必须排到最后');
+    // 只在 kind 内匹配，不能把背景池混进衣着
+    assert.ok(!outfit.includes('人文景观-建筑'), 'kind 要严格过滤');
+
+    const bg = W.rankPools(pools, '背景', 'background').map((p) => p.name);
+    assert.equal(bg[0], '人文景观-建筑', '背景要先给建筑/场景，不是花卉');
+
+    const role = W.rankPools(pools, '角色', 'role').map((p) => p.name);
+    assert.equal(role[0], 'wai_characters', '角色要先给真实角色名池');
+
+    // 没见过的部位不猜：返回空数组而不是把全部池倒出来
+    assert.deepEqual(W.rankPools(pools, '服装', 'nope').length, 4, '未知部位仍按 kind 过滤');
+  }],
+  ['池 chip：全部在最前，池名与条数都可点', () => {
+    const pools = [
+      { name: '人物-衣服', kind: '服装', item_count: 190 },
+      { name: '组合预设/服装-女性简单穿搭', kind: '服装', item_count: 740 },
+      { name: 'DanbooruTAG/panties_main', kind: '服装', item_count: 41 },
+    ];
+    // 选中一个排在后面的池：它必须被提到行首并高亮，不能「藏着」让用户不知道自己选了啥
+    const html = W.poolChipsHtml(pools, '服装', 'outfit', 'DanbooruTAG/panties_main', 1);
+    assert.ok(html.startsWith('<button'), '第一项必须是「全部」chip');
+    assert.match(html, /data-act="asm-pick-pool" data-v=""/, '「全部」要能点回默认');
+    assert.match(html, /class="pool-chip on"[^>]*data-v="DanbooruTAG\/panties_main"/,
+      '当前池即使排在后面也要高亮（提到行首）');
+    assert.ok(html.includes('<i>41</i>'), 'chip 上要带条目数，用户才知道值不值得点');
+    // 只摆 limit 个池 + 「全部」：放不下的靠标题里的「N 池匹配」与下拉，不占 chip 行空间
+    assert.equal((html.match(/class="pool-chip/g) || []).length, 2, 'chip 数量要受 limit 控制');
+  }],
+  ['池选择接线：选择器渲染 chip 行、默认落在最佳池', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    assert.match(app, /poolChipsHtml\(state\.pools/, '选择器要渲染匹配池 chip 行');
+    assert.match(app, /case 'asm-pick-pool'/, '点 chip 要有事件');
+    assert.match(app, /rankPools\(state\.pools[\s\S]{0,120}item_count/,
+      '打开选择器时要默认落在条目最多的匹配池');
+    const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
+    assert.match(css, /\.asm-pools\s*\{[^}]*overflow-x:\s*auto/, 'chip 行横向滚动，不折行');
+  }],
 ];
 
 for (const [name, fn] of cases) {

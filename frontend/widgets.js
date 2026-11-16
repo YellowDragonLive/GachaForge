@@ -654,3 +654,111 @@ export function personTitle(person) {
   const locked = role.mode === 'locked' && role.pick;
   return locked ? String(role.pick) : '';
 }
+
+// ---------------- 部位 → 池的匹配 ----------------
+// 「全部 106 池」摊平给用户等于没给选择：同一个 kind 里混得很杂——「风格」19 池里
+// 12 个是乐器，「物品」69 池几乎全是食物和花。所以每个部位配两级关键词（strong 是这
+// 一格的正主，weak 是沾边的），命中抬分、明显跑偏压分，再按条目数补热度。
+// 效果：点背景，建筑/场景在前而不是「花卉」；点角色，wai_characters 在前而不是「人物-类型」。
+
+const POOL_HINTS = {
+  role: {
+    strong: [/wai_characters|characterfull|character|zh[_\s-]?tw/i],
+    weak: [/人物-类型/],
+  },
+  hair: {
+    strong: [/头发|发型|hair/i],
+    weak: [],
+  },
+  face: {
+    strong: [/面|表情|face_emotions|face_emotes|expression/i],
+    weak: [/face|唇|emote/i],
+  },
+  outfit: {
+    strong: [/outfit|attire|cloth|costume|wear|dress|uniform/i, /服装|衣服|穿搭|穿戴/],
+    weak: [/shirt|skirt|裙|鞋袜|装饰|比基尼|maid|lolita/i],
+  },
+  gear: {
+    strong: [/物品$|装备|道具|weapon|equipment|equpment|accessor/i],
+    weak: [/technology|sports|personal[_\s]?communication/i],
+  },
+  action: {
+    strong: [/动作|摆位|action|pose|posture/i],
+    weak: [/gesture|姿态/i],
+  },
+  background: {
+    strong: [/背景|场景|建筑|室内|室外|都市|奇幻|background|location/i],
+    weak: [/景观|花卉|天象|自然/i],
+  },
+  style: {
+    strong: [/style|movement|画风|风格|film|材质|纹理|camera/i],
+    weak: [],
+  },
+  composition: {
+    strong: [/构图|镜头|视角|composition|framing|angle/i],
+    weak: [],
+  },
+};
+
+/** 与「人穿在身上 / 拍出来」无关的池：命中关键词也降一档，别让 sex_/audio_/food_ 抢前排。 */
+const POOL_OFF_TOPIC = /(?:^|\s)(?:sex|nudity|bondage|cum|injury|audio|food|flower|plant|bread|meat|fruit|vegetable|drink|dairy|sweets|utensil|meta|provenance|verbs?|gerund)/i;
+
+/** 人工整理过的母语池（人物-衣服 / 组合预设 / 构图-视角…）质量比裸 tag 池稳，微加分。 */
+const POOL_CURATED = /^(?:人物-|组合预设\/|动作$|构图-|镜头-|自然景观-|人文景观-|色彩|材质纹理|物品$)/;
+
+/** 池名里的 `_` `/` 是分词符，正则前先摊成空格，否则 `\b` 在 `food_sweets` 上不成立。 */
+const poolText = (p) => String((p && p.name) || '').replace(/[_/]+/g, ' ').trim();
+
+export function poolScore(pool, key) {
+  const name = String((pool && pool.name) || '');
+  const text = poolText(pool);
+  const hints = POOL_HINTS[key] || { strong: [], weak: [] };
+  const has = (re) => re.test(name) || re.test(text);
+  let score = 0;
+  if ((hints.strong || []).some(has)) score += 100;
+  else if ((hints.weak || []).some(has)) score += 55;
+  // 跑偏池即使命中关键词也压到后面：`sex_acts_fetishes_facial_expressions` 确实含
+  // expression，但它不是「换表情」该先看到的东西。
+  if (POOL_OFF_TOPIC.test(text)) score -= score > 0 ? 45 : 40;
+  if (POOL_CURATED.test(name)) score += 8;
+  // 条目数是「这个池够不够抽」的直接信号，但只做微调：log 一下，最多 28 分。
+  score += Math.min(28, Math.log10(1 + Number((pool && pool.item_count) || 0)) * 11);
+  return Math.round(score * 10) / 10;
+}
+
+/** 该部位下按匹配度排序的池。空 kind 返回空数组（没法定类别就不猜）。 */
+export function rankPools(pools, kind, key) {
+  const list = (Array.isArray(pools) ? pools : [])
+    // 自己关掉的池不该被推荐：chip 上给个条数、点进去却抽不到东西最费解。
+    .filter((p) => p && p.name && p.enabled !== false
+      && String(p.kind || '') === String(kind || ''));
+  return list
+    .map((p) => ({ ...p, score: poolScore(p, key) }))
+    .sort((a, b) => b.score - a.score
+      || Number(b.item_count || 0) - Number(a.item_count || 0)
+      || String(a.name).localeCompare(String(b.name)));
+}
+
+/**
+ * 匹配到的池摆成一行可点的 chip：「全部 1234」在最前，后面按匹配度排。
+ * 一行横向滚动而不是折成三行——左栏只有 392px，折行会把条目列表挤出屏幕。
+ */
+export function poolChipsHtml(pools, kind, key, selected, limit = 8) {
+  const ranked = rankPools(pools, kind, key);
+  const total = ranked.reduce((s, p) => s + Number(p.item_count || 0), 0);
+  const chip = (v, label, count, on) => `<button type="button"
+    class="pool-chip${on ? ' on' : ''}" data-act="asm-pick-pool" data-v="${esc(v)}"
+    title="${esc(label)} · ${count} 条">${esc(cut(label, 13))}<i>${count}</i></button>`;
+  const n = Math.max(1, limit);
+  let shown = ranked.slice(0, n);
+  // 选中的池如果排在前 n 个之外（从下拉里选的），也要把它提到行首，
+  // 否则用户看不到自己当前在哪一池 —— 高亮必须永远可见。
+  const sel = ranked.find((p) => p.name === selected);
+  if (sel && !shown.includes(sel)) shown = [sel, ...shown.slice(0, n - 1)];
+  // 不放「还有 N 池」的提示：左栏只有 392px，一截文字就挤掉一个可点的池。
+  // 池总数写在选择器标题上（「106 池匹配」），剩下的池去下面那个下拉里找。
+  return [
+    chip('', '全部', total, !selected),
+    ...shown.map((p) => chip(p.name, p.name, Number(p.item_count || 0), p.name === selected)),
+  ].join('');
+}

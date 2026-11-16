@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 from collections import Counter
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
@@ -208,8 +209,36 @@ def list_items(db: Session, *, kind: str = "", q: str = "", pool: str = "",
         base = base.where(func.lower(PoolItem.label).contains(ql)
                           | func.lower(PoolItem.tags).contains(ql))
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
-    rows = db.execute(base.order_by(PoolItem.id)
-                      .limit(min(200, max(1, limit))).offset(max(0, offset))).all()
+    cap = min(200, max(1, limit))
+    if pk:
+        rows = db.execute(base.order_by(PoolItem.id).limit(cap)
+                          .offset(max(0, offset))).all()
+    else:
+        # 「全部」不等于「按 id 前 N 条」：条目是按池导入的，前 60 条会全来自同一个池
+        # （实测点衣着看到 7 条全是「人物-女性时尚穿搭」）。改成每池轮转取样，
+        # 一次就能看见十来个池的货色；per 由 limit 推，至少 2 条，避免一池霸屏。
+        # 每池 3 条：60 条能盖住 20 个池，一屏就能看出「池与池之间的差别」。
+        # 想深挖某池，点组头（或 chip / 下拉）切过去看全量。
+        per = max(2, min(5, cap // 20))
+        rn = func.row_number().over(partition_by=PoolItem.pool_id,
+                                    order_by=PoolItem.id).label("rn")
+        sz = func.count().over(partition_by=PoolItem.pool_id).label("sz")
+        sub = select(PoolItem.label.label("label"), PoolItem.tags.label("tags"),
+                     Pool.name.label("pname"), Pool.kind.label("pkind"), rn, sz) \
+            .join(Pool, Pool.id == PoolItem.pool_id)
+        if kk:
+            sub = sub.where(Pool.kind == kk)
+        if ql:
+            sub = sub.where(func.lower(PoolItem.label).contains(ql)
+                            | func.lower(PoolItem.tags).contains(ql))
+        ranked = sub.subquery()
+        # 大池先上：按字母序取前 10 池的话，看到的全是 DanbooruTAG/attire_*，
+        # 用户真正在用的「组合预设/服装-…」「人物-衣服」反而排不进来。
+        hits = db.execute(select(ranked).where(ranked.c.rn <= per)
+                          .order_by(ranked.c.sz.desc(), ranked.c.pname, ranked.c.rn)
+                          .limit(cap).offset(max(0, offset))).all()
+        rows = [(SimpleNamespace(label=r.label, tags=r.tags),
+                 SimpleNamespace(name=r.pname, kind=r.pkind)) for r in hits]
     return {
         "items": [{"label": it.label, "tags": it.tags,
                    "pool": p.name, "kind": p.kind} for it, p in rows],

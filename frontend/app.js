@@ -12,6 +12,7 @@ import {
   assemblyToDefinition, assemblyIsEmpty,
   splitTags, stripCountTags, portraitKeys, personTitle,
   dollFigureHtml, sceneStageHtml, DOLL_PARTS,
+  rankPools, poolChipsHtml,
 } from './widgets.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -305,16 +306,48 @@ function asmPartHtml(cfg, { label, key, uid, scope = 'person', open, side = '' }
   </button>`;
 }
 
+function asmEntryRow(e, showPool) {
+  return `<button type="button" class="asm-entry"
+    data-act="asm-pick" data-label="${esc(e.label)}" data-tags="${esc(e.tags || '')}"
+    title="${esc([e.tags || '', e.pool || ''].filter(Boolean).join(' · '))}">
+    <span class="asm-entry-label">${esc(cut(e.label, 42))}</span>
+    ${showPool ? `<span class="asm-entry-pool">${esc(cut(e.pool, 16))}</span>` : ''}
+  </button>`;
+}
+
 function asmEntriesHtml() {
   const a = state.assembly;
   if (a.entriesLoading) return '<div class="hint">加载中…</div>';
-  const rows = (a.entries || []).map((e) => `<button type="button" class="asm-entry"
-      data-act="asm-pick" data-label="${esc(e.label)}" data-tags="${esc(e.tags || '')}"
-      title="${esc(e.tags || '')}">
-      <span class="asm-entry-label">${esc(cut(e.label, 42))}</span>
-      <span class="asm-entry-pool">${esc(cut(e.pool, 16))}</span>
-    </button>`).join('');
-  return rows || '<div class="hint">没有匹配条目：换个词，或把池切到「全部」再试</div>';
+  const list = a.entries || [];
+  if (!list.length) return '<div class="hint">没有匹配条目：换个词，或把池切到「全部」再试</div>';
+  // 已经选定单池时，每行右侧再写一遍同一个池名是废话，把宽度让给条目名。
+  if (a.pickerPool) return list.map((e) => asmEntryRow(e, false)).join('');
+
+  // 「全部」= 多池混排（后端每池只给几条）。按池分组，组顺序跟匹配度走，
+  // 组头本身就是「只看这一池」的按钮 —— 想深挖点一下就行，不用回去找 chip。
+  const groups = new Map();
+  list.forEach((e) => {
+    const k = String(e.pool || '');
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(e);
+  });
+  const order = rankPools(state.pools, asmPickingKind(), a.picking && a.picking.key)
+    .map((p) => p.name);
+  const names = [...groups.keys()].sort((x, y) => {
+    const ix = order.indexOf(x), iy = order.indexOf(y);
+    return (ix < 0 ? 1e6 : ix) - (iy < 0 ? 1e6 : iy);
+  });
+  return names.map((name) => `<div class="asm-group" data-act="asm-pick-pool"
+      data-v="${esc(name)}" title="只看「${esc(name)}」">${esc(cut(name, 26))}</div>`
+    + groups.get(name).map((e) => asmEntryRow(e, false)).join('')).join('');
+}
+
+/** 当前选择器那一格的类别（kind），「全部」模式给组排序用。 */
+function asmPickingKind() {
+  const pk = state.assembly.picking;
+  if (!pk) return '';
+  const def = [...SCENE_SLOTS, ...PERSON_SLOTS].find((d) => d.key === pk.key);
+  return def ? def.kind : '';
 }
 
 function asmCountHtml() {
@@ -328,8 +361,13 @@ function asmPickerHtml(key) {
   const kind = def ? def.kind : '';
   const label = (def && def.label) || (key === 'role' ? '角色' : key);
   const cfg = asmCurrentCfg();
+  const ranked = rankPools(state.pools, kind, key);
+  const picked = a.pickerPool;
+  const pickedPool = ranked.find((p) => p.name === picked);
   return `<div class="asm-picker">
-    <div class="asm-picker-head"><i class="stat-dot"></i>${esc(label)} · 选条目或改状态</div>
+    <div class="asm-picker-head"><i class="stat-dot"></i>${esc(label)} · 选条目或改状态
+      <span class="asm-picker-kind">${kind ? `${ranked.length} 池匹配` : ''}</span>
+    </div>
     <div class="row">
       <button type="button" class="chip${cfg && cfg.mode === 'random' ? ' on' : ''}"
         data-act="asm-mode" data-v="random">随机</button>
@@ -338,8 +376,9 @@ function asmPickerHtml(key) {
       <span class="hint" style="flex:1">点条目即固定，之后每抽都不变</span>
       <button type="button" class="btn small" data-act="asm-close">收起</button>
     </div>
+    <div class="asm-pools">${poolChipsHtml(state.pools, kind, key, picked)}</div>
     <div class="row" style="margin-top:6px">
-      <select class="asm-pool" data-act="asm-pool">${asmPoolOptionsHtml(kind, a.pickerPool)}</select>
+      <select class="asm-pool" data-act="asm-pool" title="全部 ${ranked.length} 池">${asmPoolOptionsHtml(ranked, picked)}</select>
       <input type="text" class="asm-q" data-act="asm-q" value="${esc(a.pickerQ)}"
         placeholder="搜条目（多为英文，如 shirt / flower）">
     </div>
@@ -348,11 +387,12 @@ function asmPickerHtml(key) {
   </div>`;
 }
 
-function asmPoolOptionsHtml(kind, current) {
-  const pools = state.pools.filter((p) => String(p.kind || '') === String(kind || ''));
-  const opts = [`<option value="">全部 ${pools.length} 池</option>`];
-  pools.forEach((p) => {
-    opts.push(`<option value="${esc(p.name)}"${p.name === current ? ' selected' : ''}>${esc(p.name)}</option>`);
+/** 下拉兜底：chip 行只摆前 8 个匹配池，剩下的都在这里，选哪池都行。 */
+function asmPoolOptionsHtml(ranked, current) {
+  const opts = [`<option value="">全部 ${ranked.reduce((s, p) => s + Number(p.item_count || 0), 0)} 条</option>`];
+  ranked.forEach((p) => {
+    const name = String(p.name || '');
+    opts.push(`<option value="${esc(name)}"${name === current ? ' selected' : ''}>${esc(cut(name, 34))} · ${p.item_count || 0}</option>`);
   });
   return opts.join('');
 }
@@ -365,12 +405,29 @@ function asmCurrentCfg() {
   return p ? p.slots[pk.key] : null;
 }
 
-/** 打开某一格的选择器：先按该格类别拉一批条目（空 q = 前 60 条）。 */
+/**
+ * 打开某一格的选择器：先按该格类别拉一批条目（空 q = 前 60 条）。
+ * 默认落在「匹配度最高的池」上——点衣着就直接看到能穿的衣服，而不是 106 池
+ * 按导入顺序混出来的前 60 条；想跨池就点 chip 行的「全部」。
+ */
 async function asmOpenPicker(scope, uid, key) {
   const a = state.assembly;
   a.picking = { scope, uid, key };
-  a.entries = []; a.entriesTotal = 0; a.pickerPool = ''; a.pickerQ = '';
+  a.entries = []; a.entriesTotal = 0; a.pickerQ = '';
+  const def = [...SCENE_SLOTS, ...PERSON_SLOTS].find((d) => d.key === key);
+  const best = rankPools(state.pools, def ? def.kind : '', key)
+    .find((p) => Number(p.item_count || 0) > 0);
+  a.pickerPool = best ? String(best.name) : '';
   await renderDraw();
+  await asmLoadEntries();
+}
+
+/** 点池 chip：只换池，不重建输入框，保留搜索词与焦点。 */
+async function asmPickPool(name) {
+  const a = state.assembly;
+  if (!a.picking) return;
+  a.pickerPool = String(name || '');
+  await renderDraw();          // chip 高亮与下拉选中值都要跟着变
   await asmLoadEntries();
 }
 
@@ -1487,6 +1544,9 @@ async function onClick(e) {
       case 'asm-open':
         await asmOpenPicker(btn.dataset.scope, Number(btn.dataset.uid) || undefined,
           btn.dataset.key);
+        break;
+      case 'asm-pick-pool':
+        await asmPickPool(btn.dataset.v);
         break;
       case 'asm-close': state.assembly.picking = null; await renderDraw(); break;
       case 'asm-portrait': {
