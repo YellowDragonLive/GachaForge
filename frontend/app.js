@@ -1,6 +1,9 @@
 // 抽卡工作台前端：原生 ES Modules，零框架、零构建。
 import { api, jobStream, friendlyError } from './api.js';
 import { esc, cut, slotChips } from './detail.js';
+import { SAMPLERS, SCHEDULERS, profileDraft, tuningWorkflowHtml,
+  settingsWorkflowHtml, modelExtraFields, tuningBody, settingsBody,
+  loraPickerHtml } from './features/generation.js';
 import {
   parseFilterSpec, addFilter, removeFilter, missingFilterSlots,
   filterChipsHtml, hotTagChipsHtml,
@@ -840,33 +843,13 @@ async function setFilterMode(mode) {
 }
 
 // ---------------- 参数预设就地调参 ----------------
-const SAMPLERS = ['euler_ancestral', 'euler', 'dpmpp_2m', 'dpmpp_2m_sde',
-  'dpmpp_sde', 'ddim', 'uni_pc'];
-const SCHEDULERS = ['normal', 'karras', 'exponential', 'sgm_uniform',
-  'simple', 'ddim_uniform'];
-
 /** 展开前先把当前选中的预设读进草稿，避免打开就看到空表单。 */
 async function openTuning() {
   if (state.tuning) { state.tuning = false; await renderDraw(); return; }
   if (!Array.isArray(state.models.checkpoints) || !state.models.checkpoints.length) {
     try { state.models = await api.get('/api/comfy/models'); } catch (_) { /* 离线时退回手填值 */ }
   }
-  const pid = Number(state.form.gen_profile_id) || null;
-  const p = state.profiles.find((x) => Number(x.id) === pid) || state.profiles[0] || {};
-  state.tuneDraft = {
-    // id + srcName 用来区分「就地改」与「另存为」：名字没动就更新原预设，改名即新建
-    id: p.id ?? null,
-    srcName: p.name || '',
-    name: p.name || '默认参数',
-    checkpoint: p.checkpoint || '',
-    steps: p.steps ?? 20, cfg: p.cfg ?? 6,
-    width: p.width ?? 1024, height: p.height ?? 1360,
-    sampler: p.sampler || 'euler_ancestral',
-    scheduler: p.scheduler || 'normal',
-    negative: p.negative || 'worst quality, low quality',
-    loras: Array.isArray(p.loras) ? p.loras : [],
-    workflow: p.workflow || 'sdxl_minimal.json',
-  };
+  state.tuneDraft = profileDraft(state);
   state.tuning = true;
   await renderDraw();
 }
@@ -882,6 +865,8 @@ function tuningHtml() {
   return `<div class="tune-box">
     <div class="field"><span>保存为预设名</span>
       <input type="text" id="tName" value="${esc(t.name || '默认参数')}"></div>
+    ${tuningWorkflowHtml(state, t.workflow)}
+    ${modelExtraFields(state, t.workflow, t)}
     <div class="field" style="margin-top:8px"><span>checkpoint</span>
       <div class="row">
         ${quickFilterHtml('tCheckpoint', '筛选 checkpoint', { width: 180 })}
@@ -911,23 +896,8 @@ function tuningHtml() {
 /** 保存后立刻把表单指向这个预设，下一批抽卡就用新参数。 */
 async function saveTuning() {
   const t = state.tuneDraft || {};
-  const name = $('#tName').value.trim() || t.name;
-  const body = {
-    name,
-    checkpoint: $('#tCheckpoint').value || t.checkpoint,
-    // loras / workflow 必须带回：后端 upsert 会整体覆盖，漏传等于清空
-    loras: t.loras || [],
-    steps: num($('#tSteps').value, 20),
-    cfg: num($('#tCfg').value, 6),
-    width: num($('#tWidth').value, 1024),
-    height: num($('#tHeight').value, 1360),
-    sampler: $('#tSampler').value,
-    scheduler: $('#tScheduler').value,
-    negative: $('#tNegative').value,
-    workflow: t.workflow || 'sdxl_minimal.json',
-  };
-  // 名字没改 = 就地更新这条预设；改名 = 另存为新预设（不带 id）
-  if (t.id != null && name === t.srcName) body.id = t.id;
+  const body = tuningBody(state);
+  const name = body.name;
   const saved = await api.post('/api/gen-profiles', body);
   state.profiles = await api.get('/api/gen-profiles');
   state.form.gen_profile_id = String(saved.id);
@@ -1773,6 +1743,8 @@ async function renderSettings() {
       </div>
       <div class="field"><span>预设名</span><input type="text" id="pName"
         value="${esc(p.name || (p.id ? '默认 SDXL' : '新预设'))}"></div>
+      ${settingsWorkflowHtml(state, p.workflow)}
+      ${modelExtraFields(state, p.workflow, p)}
       <div class="field" style="margin-top:8px"><span>Checkpoint · 点选，来自 ComfyUI /object_info</span>
         <div class="row">
           ${quickFilterHtml('pCheckpoint', '筛选 checkpoint：如 sdxl / wai', { width: 200 })}
@@ -1794,23 +1766,7 @@ async function renderSettings() {
       </div>
       <div class="field" style="margin-top:8px"><span>负向提示词</span>
         <input type="text" id="pNegative" value="${esc(p.negative || '')}"></div>
-      <div class="field picker" style="margin-top:12px"><span>LoRA · 点选文件 + 调权重，无需写 JSON</span>
-        <div class="row">
-          ${quickFilterHtml('pLoraPick', '筛选 LoRA：neg / style / 画风', { width: 220 })}
-          <span class="hint" data-qf-count="pLoraPick"></span>
-          <span class="hint">共 ${(state.models.loras || []).length} 个文件</span>
-        </div>
-        <div class="row" style="margin-top:6px">
-          <select id="pLoraPick" style="flex:1;min-width:190px">${loraOptionsHtml(state.models.loras || [], state.loraDraft)}</select>
-          <label class="mini">权重<input type="number" id="pLoraWeight" value="0.8"
-            step="0.05" min="-4" max="4" style="width:86px"></label>
-          <button class="btn small primary" data-act="lora-add">＋ 添加</button>
-        </div>
-        <div id="loraRows" style="margin-top:8px">${loraRowsHtml(state.loraDraft)}</div>
-        <div class="hint">${(state.models.loras || []).length
-          ? '先在上面的框里筛（如 neg → neg4all…safetensors），回车直接选中；顺序即加载顺序，可用 ↑ ↓ 调整。负向 LoRA（neg4all 之类）把权重填成负数，例如 -1。'
-          : '当前没有可用的 LoRA 文件（mock 模式或 ComfyUI 未加载 LoRA），可留空只用 checkpoint。'}</div>
-      </div>
+      ${loraPickerHtml(state)}
       <div class="row" style="margin-top:12px"><button class="btn primary" data-act="profile-save">保存预设</button></div>
     </div></div>`;
 }
@@ -2234,17 +2190,7 @@ async function onClick(e) {
         done('预设已删除'); await renderSettings(); break;
       }
       case 'profile-save': {
-        const loras = normalizeLoras(state.loraDraft);
-        const cp = $('#pCheckpointFree')?.value.trim() || $('#pCheckpoint').value;
-        const saved = await api.post('/api/gen-profiles', {
-          // 带 id = 就地更新（改名不再产生重复预设）；新建草稿时不带 id
-          id: state.settingsPid || undefined,
-          name: $('#pName').value.trim(), checkpoint: cp, loras,
-          steps: num($('#pSteps').value, 20), cfg: num($('#pCfg').value, 6),
-          width: num($('#pWidth').value, 1024), height: num($('#pHeight').value, 1360),
-          sampler: $('#pSampler').value, scheduler: $('#pScheduler').value,
-          negative: $('#pNegative').value, workflow: 'sdxl_minimal.json',
-        });
+        const saved = await api.post('/api/gen-profiles', settingsBody(state));
         state.settingsPid = saved.id;
         state.profiles = await api.get('/api/gen-profiles');
         done(`预设已保存：${saved.name}`); await renderSettings(); break;

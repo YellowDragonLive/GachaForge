@@ -412,8 +412,10 @@ const cases = [
     assert.match(app, /async function saveTuning\(\)/, '缺少保存逻辑');
     assert.match(app, /data-act="tune-open"/, '设置栏缺少调参入口');
     assert.match(app, /data-act="tune-save"/, '缺少保存按钮');
-    // 后端 upsert 会整体覆盖 loras_json，漏传等于把用户 LoRA 清空
-    assert.match(app, /loras: t\.loras \|\| \[\]/, '漏传 loras');
+    // body 构造已收敛到 features/generation.js（多模型改造：三处 profile 编辑合一）
+    const gen = readFileSync(new URL('../frontend/features/generation.js', import.meta.url), 'utf8');
+    assert.match(gen, /loras: t\.loras \|\| \[\]/, '漏传 loras');
+    assert.match(gen, /workflow: \$\('Workflow'\)\?\.value/, 'workflow 从选择器读，不再硬编码');
     assert.match(app, /state\.form\.gen_profile_id = String\(saved\.id\)/,
       '保存后应自动应用，否则还要手动重选预设');
   }],
@@ -748,8 +750,10 @@ const cases = [
   }],
   ['筛选接线：各处都有 input，不是只有一个地方能用', () => {
     const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    // LoRA 选择器的筛选框随 profile 编辑收敛到 features/generation.js
+    const gen = readFileSync(new URL('../frontend/features/generation.js', import.meta.url), 'utf8');
     for (const id of ['pLoraPick', 'pCheckpoint', 'tCheckpoint', 'dFilterPool', 'rTplPool']) {
-      assert.match(app, new RegExp(`quickFilterHtml\\('${id}'`), `${id} 旁边要有筛选框`);
+      assert.match(app + gen, new RegExp(`quickFilterHtml\\('${id}'`), `${id} 旁边要有筛选框`);
     }
     assert.match(app, /data-asm-pool-q/, '抽卡装配的池 chip 行要能筛');
     assert.match(app, /冷存/, '冷存池要在下拉兜底里可见（否则「明明导入过怎么没有」）');
