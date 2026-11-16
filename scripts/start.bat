@@ -65,6 +65,13 @@ REM   GACHA_COMFY_DIR=... -> point at another ComfyUI portable folder
 if not defined COMFY_DIR set "COMFY_DIR=%GACHA_COMFY_DIR%"
 if not defined COMFY_DIR set "COMFY_DIR=X:\ai_tool\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable"
 
+REM ---- Model link bridge -----------------------------------------------------
+REM Civitai downloads land in models\checkpoints, but UNETLoader only enumerates
+REM models\unet and models\diffusion_models - so pure-UNet weights (Anima, Flux,
+REM Mochi...) would never appear in the picker. Hardlink them over: same bytes,
+REM no second copy. Must run BEFORE ComfyUI starts, it scans folders at startup.
+"%PY%" scripts\link_unet_models.py --models-dir "%COMFY_DIR%\ComfyUI\models" --quiet
+
 call :probe_comfy
 if not errorlevel 1 goto :comfy_ready
 if "%GACHA_COMFY_AUTO%"=="0" goto :comfy_checked
