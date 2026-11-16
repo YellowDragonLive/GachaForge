@@ -22,6 +22,7 @@
 - **清空重建固定走 `scripts/reset_db.py`**：先 `--dry-run` 看清单；备份 → 旧库与 162 个图片文件**移动**到 `data/archive/<时间戳>/`（不物理删、可回滚）→ 新库重建字典 → **回迁用户配置**（checkpoint/LoRA/自建配方按名字）。清库不删配置是硬要求，否则真实模式 checkpoint 为空会出图失败。
 - **依赖也不重新下载**（用户 2026-11-15 明确：「你别重新下载依赖，你直接剪切到这个文件夹就行」）。本机已有的 Python 包 / 模型权重一律直接搬进项目：`scripts/vendor_deps.py` 从本机 `.venv` 的 site-packages 搬到 `vendor/pydeps/`（需 Python ABI 一致，本机都是 3.13/cp313），`embed.prepare_model()` 把 Chroma 缓存的 ONNX 权重**剪切**进 `data/models/minilm/`（不复制两份）。不 `pip install`、不改 requirements 触发下载、`start.bat` 缺依赖只提示手动装一次。模型与包都不进 git、可重建。
 
+- **能不动数据就不动数据：净化放在出图出口**（用户 2026-11-16 改口径：「内部的 prompt 清除权重，不碰池子文本」）。条目自带 `(x:1.2)` 这类手写权重，在 `run_recipe` / `build_prompt` 拼 prompt 时用 `strip_weights` 剥，`pool_items` 一个字不改；**明细必须同步剥**（`strip_detail_weights`，留 `raw_tags` + `stripped_weight`），否则装配区显示原文、出图用净版，对照永远对不上。写库清理降级成审计工具的 `--apply`（`clean_weights.py` 默认只读，`--restore <备份>` 回滚）。判据：改数据不可逆 + 破坏「卡池页能看到原貌」+ 概念 key 批量漂移。
 ## 工程
 - 代码改动落盘即 `git commit`，中文提交信息（改了什么 / 为什么改 / 怎么验证）；多个独立改动拆多个 commit。
 - 高频操作先写 `scripts/` 脚本 + `docs/运维_*.md` 手册，手册是唯一口径，流程变了改手册和脚本。
