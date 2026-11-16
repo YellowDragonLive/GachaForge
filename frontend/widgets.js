@@ -519,7 +519,10 @@ export function assemblyToDefinition(assembly) {
   const push = (cfg) => {
     if (!cfg || cfg.mode === 'off') return;
     const slot = { pool: cfg.kind || '', count: 1, weight: 1 };
-    if (cfg.mode === 'locked' && cfg.pick) slot.pick = cfg.pick;
+    // 手填值：`pick` 是「池里的条目名」，`free` 是「用户自己写的任意 tag」。
+    // 两者互斥，后端优先认 free（池里找不到东西也能出图）。
+    if (cfg.mode === 'locked' && cfg.free) slot.free = cfg.free;
+    else if (cfg.mode === 'locked' && cfg.pick) slot.pick = cfg.pick;
     slots.push(slot);
   };
   SCENE_SLOTS.forEach((d) => push(scene[d.key]));
