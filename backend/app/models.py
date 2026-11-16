@@ -317,3 +317,60 @@ class EventLog(Base):
     feature: Mapped[str] = mapped_column(String(40), default="app")
     message_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
+
+
+# ---------------- 多模型 workflow 支持（2026-11-16 架构拆分新增）----------------
+# 设计原则：只加表、不改现有表，create_all 自动建表，老库零风险。
+# 详见 docs/架构_模块化与多模型.md §5。
+
+class ProfileParam(Base):
+    """预设的模型族专有参数：Anima 的 clip/vae 等，按 workflow 分包存，互不污染。"""
+    __tablename__ = "profile_params"
+    __table_args__ = (UniqueConstraint("profile_id", "workflow_id", "key",
+                                       name="uq_profile_param"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("gen_profiles.id", ondelete="CASCADE"), index=True)
+    workflow_id: Mapped[str] = mapped_column(String(160), default="sdxl")
+    key: Mapped[str] = mapped_column(String(80))
+    value_json: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
+
+
+class JobSnapshot(Base):
+    """每个生成任务的实际参数快照：worker 从此处读，修复「换预设重跑是假覆盖」。
+
+    一条 Draw 可以用不同 workflow 生成多次，每次 Job 都有独立的 workflow + 参数，
+    这才是「同一抽卡分别用 SDXL / Anima / image 出图」的数据基础。
+    """
+    __tablename__ = "job_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("generation_jobs.id", ondelete="CASCADE"), unique=True, index=True)
+    workflow: Mapped[str] = mapped_column(String(160), default="sdxl_minimal.json")
+    profile_json: Mapped[str] = mapped_column(Text, default="{}")
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    negative: Mapped[str] = mapped_column(Text, default="")
+    seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
+
+
+class SlotExtra(Base):
+    """槽位扩展：意群归属 / 三态 / 手填值 / 锁定标记。
+
+    原来这些字段只活在前台字符串（pool="任意值·P1"）和 definition_json 里，
+    关系快照与结果明细都拿不到，导致刷新后锁定标记丢失、同 seed 复现是假复现。
+    """
+    __tablename__ = "slot_extras"
+    __table_args__ = (UniqueConstraint("slot_kind", "slot_id", name="uq_slot_extra"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slot_kind: Mapped[str] = mapped_column(String(20))   # session_recipe | draw
+    slot_id: Mapped[int] = mapped_column(Integer, index=True)
+    group_key: Mapped[str] = mapped_column(String(40), default="")
+    mode: Mapped[str] = mapped_column(String(20), default="random")
+    free: Mapped[str] = mapped_column(Text, default="")
+    pick: Mapped[str] = mapped_column(String(300), default="")
+    locked: Mapped[bool] = mapped_column(Boolean, default=False)

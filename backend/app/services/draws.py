@@ -8,6 +8,7 @@ draw_profiles / session_loras / session_recipes），不再存重复 JSON。
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 import json
 import random
 import re
@@ -22,7 +23,7 @@ from ..errors import BadRequestError, ConflictError, NotFoundError
 from ..models import (Draw, DrawSession, DrawSlot, DrawSlotTag, GenProfile,
                       GenerationJob, Image, ImageAsset, Pool, Recipe,
                       SessionLora, SessionProfile, SessionRecipe,
-                      SessionRecipeSlot)
+                      SessionRecipeSlot, ProfileParam, SlotExtra)
 from . import pools as pool_svc
 
 
@@ -87,16 +88,25 @@ DEFAULT_PROFILE = {
 }
 
 
-def profile_out(row: GenProfile) -> dict:
-    return {"id": row.id, "name": row.name, "checkpoint": row.checkpoint,
-            "loras": json.loads(row.loras_json or "[]"), "steps": row.steps,
-            "cfg": row.cfg, "sampler": row.sampler, "scheduler": row.scheduler,
-            "width": row.width, "height": row.height, "negative": row.negative,
-            "workflow": row.workflow}
+def profile_out(row: GenProfile, db: Session | None = None) -> dict:
+    out = {"id": row.id, "name": row.name, "checkpoint": row.checkpoint,
+           "loras": json.loads(row.loras_json or "[]"), "steps": row.steps,
+           "cfg": row.cfg, "sampler": row.sampler, "scheduler": row.scheduler,
+           "width": row.width, "height": row.height, "negative": row.negative,
+           "workflow": row.workflow}
+    # 模型族专有参数（clip/vae 等）按 workflow 分包，平铺回出参供前端编辑。
+    if db is not None:
+        for pp in db.scalars(select(ProfileParam).where(
+                ProfileParam.profile_id == row.id)).all():
+            try:
+                out[pp.key] = json.loads(pp.value_json)
+            except Exception:
+                pass
+    return out
 
 
 def list_profiles(db: Session) -> list[dict]:
-    return [profile_out(r) for r in db.scalars(select(GenProfile).order_by(GenProfile.id)).all()]
+    return [profile_out(r, db) for r in db.scalars(select(GenProfile).order_by(GenProfile.id)).all()]
 
 
 def ensure_default_profile(db: Session) -> GenProfile:
@@ -135,9 +145,21 @@ def upsert_profile(db: Session, data: dict) -> dict:
         if key in data:
             setattr(row, key, data[key])
     row.loras_json = _dump(data.get("loras", []))
+    db.flush()
+    # 模型族专有参数（clip/vae 等）：按当前 workflow 分包存，不动主表结构。
+    wid = Path(str(row.workflow or "sdxl")).stem
+    for key in ("clip", "vae"):
+        if key in data:
+            existing = db.scalar(select(ProfileParam).where(
+                ProfileParam.profile_id == row.id,
+                ProfileParam.workflow_id == wid, ProfileParam.key == key))
+            if existing is None:
+                existing = ProfileParam(profile_id=row.id, workflow_id=wid, key=key)
+                db.add(existing)
+            existing.value_json = _dump(data[key])
     db.commit()
     db.refresh(row)
-    return profile_out(row)
+    return profile_out(row, db)
 
 
 def delete_profile(db: Session, profile_id: int) -> dict:
@@ -159,7 +181,7 @@ def resolve_profile(db: Session, profile_id: int | None) -> dict:
     row = db.get(GenProfile, profile_id) if profile_id else None
     if row is None:
         row = ensure_default_profile(db)
-    return profile_out(row)
+    return profile_out(row, db)
 
 
 # ---------------- 会话快照（关系表） ----------------
@@ -194,12 +216,21 @@ def _write_profile_snapshot(db: Session, session_id: int, profile: dict,
     for i, slot in enumerate(definition.get("slots") or []):
         if not isinstance(slot, dict):
             continue
-        db.add(SessionRecipeSlot(
+        sr_slot = SessionRecipeSlot(
             recipe_snapshot_id=r.id, idx=i, pool=str(slot.get("pool") or ""),
             count=int(slot.get("count") or 1),
             weight=float(slot.get("weight") or 1.0),
             filter=str(slot.get("filter") or ""),
-            template=str(slot.get("template") or "")))
+            template=str(slot.get("template") or ""))
+        db.add(sr_slot)
+        db.flush()
+        # 意群/三态/手填值进关系表：快照才真的可复现（原来只在 definition_json）
+        db.add(SlotExtra(slot_kind="session_recipe", slot_id=sr_slot.id,
+                         group_key=str(slot.get("group") or ""),
+                         mode=str(slot.get("mode") or "random"),
+                         free=str(slot.get("free") or ""),
+                         pick=str(slot.get("pick") or ""),
+                         locked=bool(slot.get("free") or slot.get("pick"))))
 
 
 def session_profile_dict(db: Session, session_id: int) -> dict:
@@ -223,10 +254,21 @@ def session_recipe_dict(db: Session, session_id: int) -> dict:
     slots = db.scalars(select(SessionRecipeSlot)
                        .where(SessionRecipeSlot.recipe_snapshot_id == r.id)
                        .order_by(SessionRecipeSlot.idx)).all()
+    extras = {e.slot_id: e for e in db.scalars(select(SlotExtra).where(
+        SlotExtra.slot_kind == "session_recipe",
+        SlotExtra.slot_id.in_([s.id for s in slots]) if slots else [])).all()}
+    out_slots = []
+    for s in slots:
+        d = {"pool": s.pool, "count": s.count, "weight": s.weight,
+             "filter": s.filter, "template": s.template}
+        e = extras.get(s.id)
+        if e:
+            d.update({"group": e.group_key, "mode": e.mode, "free": e.free,
+                      "pick": e.pick})
+        out_slots.append(d)
     return {"name": r.name, "fixed_head": r.fixed_head,
             "fixed_tail": r.fixed_tail, "template": r.template,
-            "slots": [{"pool": s.pool, "count": s.count, "weight": s.weight,
-                       "filter": s.filter, "template": s.template} for s in slots]}
+            "slots": out_slots}
 
 
 def _write_detail(db: Session, draw_id: int, detail: list[dict]) -> None:
@@ -241,6 +283,12 @@ def _write_detail(db: Session, draw_id: int, detail: list[dict]) -> None:
                         reason=str(item.get("reason") or ""))
         db.add(slot)
         db.flush()
+        db.add(SlotExtra(slot_kind="draw", slot_id=slot.id,
+                         group_key=str(item.get("group") or ""),
+                         mode=str(item.get("mode") or ""),
+                         free=str(item.get("free") or ""),
+                         pick=str(item.get("locked") or ""),
+                         locked=bool(item.get("locked"))))
         raw = item.get("tags")
         tags = raw if isinstance(raw, list) else ([raw] if raw else [])
         for j, tag in enumerate(tags):
@@ -264,9 +312,19 @@ def detail_for_draws(db: Session, draw_ids: list[int]) -> dict[int, list[dict]]:
                 .where(DrawSlotTag.slot_id.in_(ids))
                 .order_by(DrawSlotTag.slot_id, DrawSlotTag.idx)).all():
             by_slot.setdefault(int(slot_id), []).append(str(tag))
+    extras = {e.slot_id: e for e in db.scalars(select(SlotExtra).where(
+        SlotExtra.slot_kind == "draw",
+        SlotExtra.slot_id.in_(ids) if ids else [])).all()}
     for s in slots:
         item = {"slot": s.slot, "pool": s.pool, "label": s.label,
                 "tags": by_slot.get(s.id, [])}
+        e = extras.get(s.id)
+        if e:
+            if e.group_key:
+                item["group"] = e.group_key
+            if e.locked:
+                item["locked"] = e.pick
+                item["mode"] = e.mode
         if s.empty:
             item["empty"] = True
             item["reason"] = s.reason

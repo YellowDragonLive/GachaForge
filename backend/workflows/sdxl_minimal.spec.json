@@ -1,0 +1,29 @@
+{
+  "id": "sdxl",
+  "label": "SDXL",
+  "capabilities": ["lora", "negative"],
+  "result_nodes": ["7"],
+  "params": {
+    "CKPT": {"source": "profile", "key": "checkpoint"},
+    "PROMPT": {"source": "prompt"},
+    "NEGATIVE": {"source": "negative"},
+    "SEED": {"source": "seed"},
+    "WIDTH": {"source": "profile", "key": "width", "default": 1024},
+    "HEIGHT": {"source": "profile", "key": "height", "default": 1360},
+    "STEPS": {"source": "profile", "key": "steps", "default": 20},
+    "CFG": {"source": "profile", "key": "cfg", "default": 6.0},
+    "SAMPLER": {"source": "profile", "key": "sampler", "default": "euler_ancestral"},
+    "SCHEDULER": {"source": "profile", "key": "scheduler", "default": "normal"},
+    "MODEL_SRC": {"source": "lora_chain", "slot": "model", "default": "1"},
+    "CLIP_SRC": {"source": "lora_chain", "slot": "clip", "default": "1"},
+    "PREFIX": {"source": "prefix"}
+  },
+  "lora": {
+    "class_type": "LoraLoader",
+    "node_prefix": 100,
+    "name_input": "lora_name",
+    "model_input": "model", "model_slot": 0,
+    "clip_input": "clip", "clip_slot": 1,
+    "weight_model": "strength_model", "weight_clip": "strength_clip"
+  }
+}

@@ -17,7 +17,9 @@ from sqlalchemy import select
 from .config import get_settings
 from .db import SessionLocal
 from .logging import emit
-from .models import Draw, EventLog, GenerationJob
+from pathlib import Path
+
+from .models import Draw, EventLog, GenerationJob, JobSnapshot, ProfileParam
 from .services import draws as draw_svc
 from .services import generation as job_svc
 from .services import images as image_svc
@@ -126,14 +128,35 @@ class GenerationWorker(threading.Thread):
             draw = db.get(Draw, row.draw_id)
             if draw is None:
                 raise ComfyError("关联的抽卡结果已不存在")
-            profile = draw_svc.session_profile_dict(db, draw.session_id)
-            seed = draw.seed if draw.seed is not None else (row.id * 7919)
+            # 优先读这个 Job 自己的参数快照（多 workflow 重跑的关键）；
+            # 老任务没有快照时回落到 session 快照，保证升级平滑。
+            snap = db.scalar(select(JobSnapshot).where(JobSnapshot.job_id == job_id))
+            if snap:
+                profile = json.loads(snap.profile_json or "{}")
+                prompt_text = snap.prompt or draw.prompt
+                negative_text = snap.negative or draw.negative
+                seed = snap.seed if snap.seed is not None else (row.id * 7919)
+                wf_name = snap.workflow or "sdxl_minimal.json"
+            else:
+                profile = draw_svc.session_profile_dict(db, draw.session_id)
+                prompt_text, negative_text = draw.prompt, draw.negative
+                seed = draw.seed if draw.seed is not None else (row.id * 7919)
+                wf_name = profile.get("workflow") or "sdxl_minimal.json"
             prefix = f"gacha_s{draw.session_id}_d{draw.id}"
 
+            # 模型专有参数（Anima 的 clip/vae 等）从 profile_params 合入 profile；
+            # 这样 spec 的 profile:key 来源对三种 workflow 都成立。
+            for pp in db.scalars(select(ProfileParam).where(
+                    ProfileParam.profile_id == (profile.get("id") or -1),
+                    ProfileParam.workflow_id == Path(wf_name).stem)).all():
+                try:
+                    profile[pp.key] = json.loads(pp.value_json)
+                except Exception:
+                    pass
+            wf_spec = client.workflows.load(wf_name)
             workflow = client.build_workflow(
-                profile=profile, prompt=draw.prompt, negative=draw.negative,
-                seed=seed, workflow_name=profile.get("workflow") or "sdxl_minimal.json",
-                prefix=prefix)
+                profile=profile, prompt=prompt_text, negative=negative_text,
+                seed=seed, workflow_name=wf_name, prefix=prefix, spec=wf_spec)
             prompt_id = client.submit(workflow)
             row.comfy_prompt_id = prompt_id
             self._set(db, row, "running", progress=1)
@@ -157,7 +180,7 @@ class GenerationWorker(threading.Thread):
 
             results = client.wait_result(
                 prompt_id, on_progress=on_progress, cancel_check=cancel_check,
-                timeout=self.s.comfy_timeout)
+                timeout=self.s.comfy_timeout, result_nodes=wf_spec.result_nodes)
             image_ids = []
             for i, data in enumerate(results):
                 img = image_svc.save_result(db, row, data, index=i)

@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 
 from ..config import get_settings
+from ..core.workflow import WorkflowRegistry, WorkflowSpec
 
 
 class ComfyError(Exception):
@@ -31,6 +32,7 @@ class ComfyClient:
         self.s = settings or get_settings()
         self.client_id = client_id or f"gacha-{uuid.uuid4().hex[:12]}"
         self.http = httpx.Client(base_url=self.s.comfy_url, timeout=10.0)
+        self.workflows = WorkflowRegistry(self.s.workflow_dir)
 
     # ---------- 基础 ----------
     def status(self) -> dict:
@@ -88,45 +90,40 @@ class ComfyClient:
     # ---------- workflow ----------
     def build_workflow(self, *, profile: dict, prompt: str, negative: str,
                        seed: int, workflow_name: str = "sdxl_minimal.json",
-                       prefix: str = "gacha") -> dict:
-        """读模板 → 渲染占位符 → 动态串联 LoraLoader。"""
-        path = self.s.workflow_dir / workflow_name
+                       prefix: str = "gacha", spec: WorkflowSpec | None = None) -> dict:
+        """读模板 → 按 spec 渲染占位符 → 按 spec 注入 LoRA。
+
+        节点 ID、占位符集合、LoRA 槽位全部由 spec 数据驱动；spec=None 时按文件名现读，
+        没有 spec 文件的老模板自动降级到 SDXL 兼容模式（老预设无需改一个字）。
+        """
+        spec = spec or self.workflows.load(workflow_name)
+        path = self.s.workflow_dir / spec.template
         if not path.is_file():
             raise ComfyError(f"workflow 模板不存在: {path}")
         template = json.loads(path.read_text(encoding="utf-8"))
         wf = {k: v for k, v in template.items() if not k.startswith("_")}
 
-        loras = profile.get("loras") or []
-        model_src, clip_src = "1", "1"
-        for i, lora in enumerate(loras):
+        # LoRA 链起点从 spec 的 MODEL_SRC/CLIP_SRC 默认值读，不再写死 "1"。
+        defaults = spec.params.get("MODEL_SRC", {}).get("default", "1")
+        clip_defaults = spec.params.get("CLIP_SRC", {}).get("default", "1")
+        model_src, clip_src = str(defaults), str(clip_defaults)
+        lora_cfg = spec.lora
+        for i, lora in enumerate(profile.get("loras") or []):
             name = str(lora.get("name") or "").strip()
             if not name:
                 continue
+            if not lora_cfg:
+                raise ComfyError(f"workflow {spec.id} 不支持 LoRA")
             weight = float(lora.get("weight", 1.0))
-            nid = str(100 + i)
-            wf[nid] = {
-                "class_type": "LoraLoader",
-                "inputs": {"lora_name": name, "strength_model": weight,
-                           "strength_clip": weight,
-                           "model": [model_src, 0], "clip": [clip_src, 1]},
-            }
-            model_src, clip_src = nid, nid
+            nid = str(int(lora_cfg.get("node_prefix", 100)) + i)
+            node = spec.lora_node(nid, name, weight, model_src, clip_src)
+            if node:
+                wf[nid] = node
+                model_src, clip_src = nid, nid
 
-        params: dict[str, Any] = {
-            "CKPT": profile.get("checkpoint") or "",
-            "PROMPT": prompt,
-            "NEGATIVE": negative,
-            "SEED": int(seed),
-            "WIDTH": int(profile.get("width", 1024)),
-            "HEIGHT": int(profile.get("height", 1360)),
-            "STEPS": int(profile.get("steps", 20)),
-            "CFG": float(profile.get("cfg", 6.0)),
-            "SAMPLER": profile.get("sampler", "euler_ancestral"),
-            "SCHEDULER": profile.get("scheduler", "normal"),
-            "MODEL_SRC": model_src,
-            "CLIP_SRC": clip_src,
-            "PREFIX": prefix,
-        }
+        params = spec.resolve_params(profile=profile, prompt=prompt, negative=negative,
+                                     seed=seed, prefix=prefix,
+                                     model_src=model_src, clip_src=clip_src)
         for node in wf.values():
             inputs = node.get("inputs", {})
             for key, val in list(inputs.items()):
@@ -163,9 +160,14 @@ class ComfyClient:
         r.raise_for_status()
         return r.json().get(prompt_id)
 
-    def _images_from_history(self, record: dict) -> list[dict]:
+    def _images_from_history(self, record: dict, result_nodes: tuple[str, ...] = ()) -> list[dict]:
+        """取结果图。spec 声明了 result_nodes 就只认这些节点——多 workflow 里
+        中间预览节点也会产 images[]，全扫会把预览当成品收进来。空 tuple = 老行为。"""
         out = []
-        for _nid, node in (record.get("outputs") or {}).items():
+        allowed = set(result_nodes) if result_nodes else None
+        for nid, node in (record.get("outputs") or {}).items():
+            if allowed is not None and str(nid) not in allowed:
+                continue
             for img in node.get("images", []) or []:
                 out.append({"filename": img.get("filename", ""),
                             "subfolder": img.get("subfolder", ""),
@@ -189,7 +191,8 @@ class ComfyClient:
             pass
 
     def wait_result(self, prompt_id: str, *, on_progress: Callable[[int, int, str], None],
-                    cancel_check: Callable[[], bool], timeout: int) -> list[bytes]:
+                    cancel_check: Callable[[], bool], timeout: int,
+                    result_nodes: tuple[str, ...] = ()) -> list[bytes]:
         """阻塞等待一次生成完成，返回图片字节列表。进度通过回调上报。"""
         if self.s.comfy_mock:
             return self._mock_wait(on_progress, cancel_check)
@@ -235,7 +238,7 @@ class ComfyClient:
                         raise ComfyError("ComfyUI 执行失败: " +
                                          json.dumps(record.get("status", {}),
                                                     ensure_ascii=False)[:400])
-                    infos = self._images_from_history(record)
+                    infos = self._images_from_history(record, result_nodes)
                     if infos:
                         on_progress(100, 100, "saving")
                         return [self.view(i) for i in infos]

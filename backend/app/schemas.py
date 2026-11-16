@@ -109,6 +109,10 @@ class GenProfileIn(BaseModel):
     height: int = Field(default=1360, ge=64, le=4096)
     negative: str = "worst quality, low quality"
     workflow: str = "sdxl_minimal.json"
+    # 模型族专有参数：Anima 的 CLIP/VAE 文件名，按 workflow 分包存。
+    # 不声明会被 Pydantic v2 静默丢弃（2026-11-16 踩过 free 字段的坑）。
+    clip: str = ""
+    vae: str = ""
 
 
 class GenProfileOut(_Out):

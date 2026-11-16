@@ -79,7 +79,7 @@ def delete_pool(pool_id: int, db: Session = Depends(get_db)):
 @router.get("/{pool_id}/items")
 def list_items(pool_id: int, q: str = "", limit: int = Query(100, le=500),
                offset: int = 0, db: Session = Depends(get_db)):
-    return ok(svc.list_items(db, pool_id, q=q, limit=limit, offset=offset))
+    return ok(svc.list_pool_items(db, pool_id, q=q, limit=limit, offset=offset))
 
 
 @router.post("/{pool_id}/items")

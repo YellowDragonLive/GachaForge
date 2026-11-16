@@ -541,7 +541,9 @@ export function assemblyToDefinition(assembly) {
   const slots = [];
   const push = (cfg, group) => {
     if (!cfg || cfg.mode === 'off') return;
-    const slot = { pool: cfg.kind || '', count: 1, weight: 1 };
+    // group 是意群归属（场景 / P1 / P2…），必须显式传给后端存进关系表；
+    // 只靠 pool 字符串前缀表达归属是补丁做法，刷新页面后就丢了。
+    const slot = { pool: cfg.kind || '', count: 1, weight: 1, group, mode: cfg.mode };
     // 手填值：`pick` 是「池里的条目名」，`free` 是「用户自己写的任意 tag」。
     // 两者互斥，后端优先认 free（池里找不到东西也能出图）。
     if (cfg.mode === 'locked' && cfg.free) slot.free = cfg.free;
@@ -551,7 +553,8 @@ export function assemblyToDefinition(assembly) {
   // 意群自己的自由输入：pool 名带上意群标记，卡片明细里能看出这句话属于谁。
   const pushExtra = (text, group) => {
     const v = String(text || '').trim();
-    if (v) slots.push({ pool: `任意值·${group}`, count: 1, weight: 1, free: v });
+    if (v) slots.push({ pool: `任意值·${group}`, count: 1, weight: 1,
+      group, mode: 'locked', free: v });
   };
   SCENE_SLOTS.forEach((d) => push(scene[d.key], GROUP_SCENE));
   pushExtra(scene.extra, GROUP_SCENE);

@@ -11,6 +11,7 @@ from ..db import get_db
 from ..errors import ok
 from ..logging import recent
 from ..models import EventLog, Pool, Recipe
+from ..core.workflow import WorkflowRegistry
 from ..services.comfy import ComfyClient
 
 router = APIRouter(tags=["system"])
@@ -33,7 +34,12 @@ def ready(db: Session = Depends(get_db)):
 
 @router.get("/api/config")
 def config():
-    return ok(get_settings().public())
+    s = get_settings()
+    data = s.public()
+    # workflow 从「文件名列表」升级为「带 spec/能力的描述」；
+    # 保留 workflows 原字段供老前端兼容，新增 workflow_specs 供模型选择器使用。
+    data["workflow_specs"] = WorkflowRegistry(s.workflow_dir).describe()
+    return ok(data)
 
 
 @router.get("/api/comfy/status")

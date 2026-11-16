@@ -462,7 +462,11 @@ const cases = [
     assert.equal(role.pick, 'artoria pendragon', '锁定必须带 pick');
     const gear = def.slots.find((s) => s.pool === '物品');
     assert.equal(gear.pick, undefined, '随机格不能带 pick，否则永远是同一件');
-    assert.ok(!JSON.stringify(def).includes('"mode"'), 'mode 是前端状态，不能漏进后端定义');
+    // mode/group 现在要传给后端存进 slot_extras：快照复现三态与意群归属的前提。
+    // 旧断言禁止它们进定义，是「快照只存 pool/count/weight」时代的补丁口径。
+    assert.ok(def.slots.every((s) => s.mode && s.group),
+      '每个槽位都带 mode/group，后端据此存快照（刷新后锁定标记不丢）');
+    assert.equal(role.group, 'P1', '人物槽位带意群归属');
     // 默认状态是一张白纸：一进来任何格子都不该替用户做决定
     const fresh = W.assemblyToDefinition({ people: [W.makePerson(9)], scene: W.makeScene() });
     assert.equal(fresh.slots.length, 0, '默认全关：不预先把随机塞进 prompt');

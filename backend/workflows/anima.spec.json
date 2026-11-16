@@ -1,0 +1,30 @@
+{
+  "id": "anima",
+  "label": "Anima (Qwen-Image)",
+  "capabilities": ["lora", "negative", "clip", "vae"],
+  "result_nodes": ["46"],
+  "params": {
+    "CKPT": {"source": "profile", "key": "checkpoint"},
+    "CLIP": {"source": "profile", "key": "clip", "default": "qwen_3_06b_base.safetensors"},
+    "VAE": {"source": "profile", "key": "vae", "default": "qwen_image_vae.safetensors"},
+    "PROMPT": {"source": "prompt"},
+    "NEGATIVE": {"source": "negative"},
+    "SEED": {"source": "seed"},
+    "WIDTH": {"source": "profile", "key": "width", "default": 1024},
+    "HEIGHT": {"source": "profile", "key": "height", "default": 1344},
+    "STEPS": {"source": "profile", "key": "steps", "default": 25},
+    "CFG": {"source": "profile", "key": "cfg", "default": 4.5},
+    "SAMPLER": {"source": "profile", "key": "sampler", "default": "euler"},
+    "SCHEDULER": {"source": "profile", "key": "scheduler", "default": "normal"},
+    "MODEL_SRC": {"source": "lora_chain", "slot": "model", "default": "44"},
+    "PREFIX": {"source": "prefix"}
+  },
+  "lora": {
+    "class_type": "LoraLoaderModelOnly",
+    "node_prefix": 100,
+    "name_input": "lora_name",
+    "model_input": "model", "model_slot": 0,
+    "weight_model": "strength_model",
+    "weight_clip": ""
+  }
+}

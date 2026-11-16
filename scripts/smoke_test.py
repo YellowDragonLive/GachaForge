@@ -616,6 +616,50 @@ def main() -> int:
         check("词表端点已注册",
               all(p in paths for p in ("/api/vocab/suggest", "/api/vocab/translate")))
 
+        print("-- 多模型 workflow 架构（数据驱动适配器） --")
+        sys.path.insert(0, str(ROOT / "backend"))
+        from app.core.workflow import WorkflowRegistry
+        from app.services.comfy import ComfyClient
+        from app.config import get_settings
+        reg = WorkflowRegistry(ROOT / "backend" / "workflows")
+        names = reg.templates()
+        check("workflow 模板可被枚举（sdxl + anima）",
+              "sdxl_minimal.json" in names and "anima.json" in names, str(names))
+        sdxl_spec = reg.load("sdxl_minimal.json")
+        anima_spec = reg.load("anima.json")
+        check("spec 已加载（非兼容降级）",
+              not sdxl_spec.legacy and not anima_spec.legacy,
+              f"sdxl={sdxl_spec.id} anima={anima_spec.id}")
+        check("两种模型 LoRA 策略不同且各自正确",
+              sdxl_spec.lora["class_type"] == "LoraLoader"
+              and anima_spec.lora["class_type"] == "LoraLoaderModelOnly"
+              and anima_spec.params["MODEL_SRC"]["default"] == "44",
+              f"{sdxl_spec.lora['class_type']} / {anima_spec.lora['class_type']}")
+        client = ComfyClient(get_settings())
+        profile = {"checkpoint": "test.safetensors", "steps": 5,
+                   "loras": [{"name": "l.safetensors", "weight": 0.8}]}
+        for wf_name in ("sdxl_minimal.json", "anima.json"):
+            wf = client.build_workflow(profile=profile, prompt="a cat", negative="bad",
+                                       seed=42, workflow_name=wf_name, prefix="smoke")
+            leftover = [v for node in wf.values() for v in node.get("inputs", {}).values()
+                        if isinstance(v, str) and v.startswith("$")]
+            check(f"构图无残留占位符: {wf_name}", not leftover,
+                  f"{len(wf)} 节点")
+        check("结果节点由 spec 指定，不扫全部节点",
+              sdxl_spec.result_nodes == ("7",) and anima_spec.result_nodes == ("46",))
+        cfg = c.get("/api/config").json()["data"]
+        check("/api/config 下发 workflow_specs",
+              len(cfg.get("workflow_specs", [])) >= 2
+              and all("capabilities" in w for w in cfg["workflow_specs"]),
+              str([w.get("id") for w in cfg.get("workflow_specs", [])]))
+        import sqlite3 as _sq
+        _db = _sq.connect(str(get_settings().db_path))
+        _tables = {r[0] for r in _db.execute(
+            "select name from sqlite_master where type='table'")}
+        _db.close()
+        check("三张新表存在（job_snapshots/profile_params/slot_extras）",
+              {"job_snapshots", "profile_params", "slot_extras"} <= _tables)
+
         print("-- 离线依赖（零下载约定） --")
         req = (ROOT / "requirements.txt").read_text(encoding="utf-8")
         bat = (ROOT / "scripts" / "start.bat").read_text(encoding="utf-8")

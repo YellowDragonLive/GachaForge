@@ -2,13 +2,14 @@
 """生成任务编排：幂等提交、取消、重试、重启恢复。"""
 from __future__ import annotations
 
+import json
 import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..errors import JobStateError, NotFoundError
-from ..models import Draw, GenerationJob
+from ..models import Draw, GenerationJob, JobSnapshot
 from . import draws as draw_svc
 
 ACTIVE = ("queued", "submitted", "running", "cancelling")
@@ -60,6 +61,13 @@ def submit_jobs(db: Session, draw_ids: list[int], *,
         row = GenerationJob(draw_id=did, status="queued", idempotency_key=key)
         db.add(row)
         db.flush()
+        # 参数快照写在这个 Job 上，而不是 session 上——这样同一 Draw 用不同
+        # workflow 重跑时，每个 Job 都带着自己当时的真实参数（修复假覆盖）。
+        db.add(JobSnapshot(
+            job_id=row.id,
+            workflow=str(profile.get("workflow") or "sdxl_minimal.json"),
+            profile_json=json.dumps(profile, ensure_ascii=False),
+            prompt=draw.prompt, negative=draw.negative, seed=draw.seed))
         created.append(row.id)
     db.commit()
     return {"created": created, "reused": reused,

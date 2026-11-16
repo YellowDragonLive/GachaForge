@@ -95,8 +95,8 @@ def delete_pool(db: Session, pool_id: int) -> None:
     db.commit()
 
 
-def list_items(db: Session, pool_id: int, *, q: str = "",
-               limit: int = 100, offset: int = 0) -> dict:
+def list_pool_items(db: Session, pool_id: int, *, q: str = "",
+                    limit: int = 100, offset: int = 0) -> dict:
     stmt = select(PoolItem).where(PoolItem.pool_id == pool_id)
     count_stmt = select(func.count()).select_from(PoolItem).where(PoolItem.pool_id == pool_id)
     if q:
