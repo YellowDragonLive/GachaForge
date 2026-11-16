@@ -786,6 +786,25 @@ const cases = [
     assert.match(css, /grid-template-areas: "bg style" "stage stage" "artist comp"/,
       '画师格与构图并排，不挤掉画布');
   }],
+  ['画师图鉴缩略图：条目带样图地址，浮层挂在 body 上不被列表裁掉', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
+    assert.match(app, /data-thumb-url="\$\{esc\(thumb\)\}"/, '画师条目要带上样图地址');
+    assert.match(app, /function showThumbPop/, '要有悬停浮层');
+    assert.match(app, /thumbPop\.className = 'thumb-pop'/, '浮层节点由前端建');
+    assert.match(app, /document\.body\.appendChild\(thumbPop\)/,
+      '浮层挂到 body：列表是 overflow:auto，挂在行内会被裁掉');
+    assert.match(app, /addEventListener\('scroll', hideThumbPop, true\)/,
+      '滚动时收起浮层（fixed 定位会与行错位）');
+    assert.match(css, /\.thumb-pop\s*\{[^}]*position:\s*fixed/, '浮层必须 fixed 定位');
+    assert.match(css, /\.asm-entry-eye/, '有样图的行要有「图」标，否则用户不知道能悬停');
+    // 后端配对：只有真配得上样图的画师才给地址，前端不会去打必然 404 的图
+    const svc = readFileSync(new URL('../backend/app/services/pools.py', import.meta.url), 'utf8');
+    assert.match(svc, /def _attach_artist_thumbs/);
+    assert.match(svc, /\/api\/semantics\/artist-thumb\?name=/);
+    const api = readFileSync(new URL('../backend/app/api/semantics.py', import.meta.url), 'utf8');
+    assert.match(api, /@router\.get\("\/artist-thumb"\)/);
+  }],
 ];
 
 for (const [name, fn] of cases) {

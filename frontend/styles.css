@@ -311,6 +311,19 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
 .asm-entry-label { flex: 1; min-width: 0; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .asm-entry-pool { color: var(--muted); font-size: 11px; white-space: nowrap; }
+/* 画师条目：行尾「图」标说明它有位画师的风格样图，悬停才浮出那张图。
+   列表本身零 <img>：一千多条画师名一次铺图又慢又看不出好坏。 */
+.asm-entry-eye { flex: none; font-size: 9.5px; line-height: 1.2; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
+.asm-entry.has-thumb:hover .asm-entry-eye { color: var(--primary);
+  border-color: var(--primary); }
+.thumb-pop { position: fixed; z-index: 60; width: 198px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+  pointer-events: none; }
+.thumb-pop[hidden] { display: none; }
+.thumb-pop img { display: block; width: 100%; height: 200px; object-fit: cover;
+  border-radius: 5px; background: var(--surface-2); }
 /* 「全部」模式的分组头：贴在分组上方，本身可点（只看这一池）。 */
 .asm-group { position: sticky; top: 0; z-index: 1; font-size: 10.5px; font-weight: 500;
   color: var(--muted); background: var(--surface-2); padding: 4px 8px 4px 7px;

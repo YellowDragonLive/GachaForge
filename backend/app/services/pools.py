@@ -10,10 +10,12 @@ from collections import Counter
 from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ..core import semantics as sem_core
 from ..core import wildcards as wc_core
 from ..core.pools import Item, PoolData, discover_pools
 from ..errors import ConflictError, NotFoundError
@@ -255,13 +257,32 @@ def list_items(db: Session, *, kind: str = "", q: str = "", pool: str = "",
                           .limit(cap).offset(max(0, offset))).all()
         rows = [(SimpleNamespace(label=r.label, tags=r.tags),
                  SimpleNamespace(name=r.pname, kind=r.pkind)) for r in hits]
+    items = [{"label": it.label, "tags": it.tags,
+              "pool": p.name, "kind": p.kind} for it, p in rows]
+    _attach_artist_thumbs(items)
     return {
-        "items": [{"label": it.label, "tags": it.tags,
-                   "pool": p.name, "kind": p.kind} for it, p in rows],
+        "items": items,
         "total": int(total),
         "kind": kk or "全部",
         "query": q or "",
     }
+
+
+def _attach_artist_thumbs(items: list[dict]) -> None:
+    """画师池的条目补上「这位画师的风格样图」地址。
+
+    一千多条画师名里，`dore \\(gilles dore\\)` 这种字面量判断不了画风；
+    有样图的条目才带地址（没样图的不给，前端就不会去请求一个必然 404 的图）。
+    前端只在悬停 / 聚焦时才加载这张图，列表本身仍然零 <img>。
+    """
+    for row in items:
+        if str(row.get("kind") or "") != "画师":
+            continue
+        label = str(row.get("label") or "")
+        if not label or sem_core.artist_thumb(label) is None:
+            continue
+        row["thumb_url"] = ("/api/semantics/artist-thumb?name="
+                            + quote(label, safe=""))
 
 
 def add_item(db: Session, pool_id: int, data: dict) -> PoolItem:

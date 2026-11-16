@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -145,3 +146,87 @@ def suggest(query: str, top_k: int = 12) -> dict:
             row["reason"] = [{"tag": idx.tags[t]} for t in tids[:3]]
         items.append(row)
     return {"query": q, "items": items, "total": len(items), "mode": mode}
+
+
+# ---------------- 画师图鉴：条目名 → 风格样图 ----------------
+# 画师池（gallery:artists）里只有名字，`dore \(gilles dore\)` 这行字看不出画风。
+# 样图文件名是 `<源序号>_<画师名>_result[_时间戳].png`（名字里的空格写成下划线），
+# 所以把「条目名」和「文件名」归一到同一个 key 上，名字对得上就有图。
+# 只记路径、不复制文件；目录 mtime 变了（换了一批样图）才重扫。
+
+_THUMB_INDEX: dict = {"sig": None, "data": {}}
+
+
+_ARTIST_PREFIX = re.compile(r"^(artist|rib|character|series|costume)\s*:\s*")
+
+
+def _norm_artist(name: str, *, keep_prefix: bool = False) -> str:
+    s = str(name or "").strip().lower()
+    s = s.replace("\\", "").replace("_", " ")
+    if keep_prefix:
+        # 样图文件名直接用的是池里的原始 tag：`artist:satou daiji` 写成
+        # `235_artistsatou_daiji_result.png`（冒号被吃掉，前缀和名字粘在一起）。
+        s = s.replace(":", "")
+    else:
+        # 反过来，池里的标签带 `artist:` / `rib:` 前缀，而有的文件名没有
+        s = _ARTIST_PREFIX.sub("", s)
+    # `sunna (nilsunna)` 与 `sunna_(nilsunna)_result` 归一时，括号两侧的空格不算差异
+    s = re.sub(r"\s*([()\[\]])\s*", r"\1", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _loose_artist(name: str) -> str:
+    """再去掉一切标点：`y(uhki)` / `y-uhki` / `y uhki` 视为同一个画师。
+    只做兜底命中；精确 key 优先，避免把两位不同画师认成同一个人。"""
+    s = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", _norm_artist(name))
+    return s or re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", _norm_artist(name, keep_prefix=True))
+
+
+def _thumb_root() -> Path:
+    root = Path(load().meta.get("thumbs_dir", ""))
+    if not str(root) or not root.is_dir():
+        raise SemanticsUnavailable("画师样图目录不可用")
+    return root
+
+
+def _artist_index() -> dict:
+    root = _thumb_root()
+    sig = (str(root), root.stat().st_mtime_ns, root.stat().st_size)
+    if _THUMB_INDEX["sig"] == sig:
+        return _THUMB_INDEX["data"]
+    exact: dict[str, Path] = {}
+    loose: dict[str, Path] = {}
+    for p in sorted(root.glob("*.png")):
+        m = re.match(r"^\d+_(.+?)_result(?:_\d+)?$", p.stem)
+        if not m:
+            continue
+        raw = m.group(1)
+        # 同一个文件名登记两种 key：带前缀（`artistsatou_daiji`）与去前缀
+        # （`satou daiji`），这样池里两种写法都能命中同一张样图。
+        for key in {_norm_artist(raw, keep_prefix=True), _norm_artist(raw)}:
+            if not key:
+                continue
+            # 同一位画师可能有两张样图（`1021_pixel_art` / `1024_pixel_art`）：
+            # setdefault 保留第一张，两张都是他的画风，用哪张都对。
+            exact.setdefault(key, p)
+            loose.setdefault(_loose_artist(key), p)
+    data = {"exact": exact, "loose": loose, "root": root}
+    _THUMB_INDEX.update(sig=sig, data=data)
+    return data
+
+
+def artist_thumb(name: str) -> Path | None:
+    """条目名 → 风格样图；名字对不上（或样图目录没了）返回 None，不抛错。"""
+    key = str(name or "").strip()
+    if not key:
+        return None
+    try:
+        idx = _artist_index()
+    except (SemanticsUnavailable, OSError):
+        return None
+    for key in (_norm_artist(key, keep_prefix=True), _norm_artist(key),
+                _loose_artist(key)):
+        hit = idx["exact"].get(key) or idx["loose"].get(key)
+        if hit is not None:
+            return hit
+    return None

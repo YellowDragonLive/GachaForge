@@ -52,3 +52,17 @@ def thumb(index: int = Query(..., ge=1)):
         raise _unavailable(exc) from exc
     return FileResponse(str(p), media_type="image/png",
                         headers={"Cache-Control": "public, max-age=86400"})
+
+
+@router.get("/artist-thumb")
+def artist_thumb(name: str = Query(..., min_length=1)):
+    """画师池条目名 → 该画师的风格样图（只读，路径来自样图目录白名单）。
+
+    画师图鉴有一千多条名字，光看 `dore \\(gilles dore\\)` 判断不了画风；
+    选择器里悬停一行就拉这张图，看的是画不是字。
+    """
+    p = semantics.artist_thumb(name)
+    if p is None:
+        raise AppError("这个画师没有风格样图", code="thumb_not_found", status=404)
+    return FileResponse(str(p), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})

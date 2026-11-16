@@ -319,11 +319,23 @@ function asmPartHtml(cfg, { label, key, uid, scope = 'person', open, side = '' }
   </button>`;
 }
 
+/**
+ * 一行条目。画师池的条目带风格样图地址（后端按画师名配好的）：
+ * 行尾挂一个「图」标，悬停 / 聚焦时浮出那位画师的样图——
+ * 名字是 `dore (gilles dore)` 还是 `nawakena`，光看字判断不了画风。
+ * 浮层不进 DOM 常驻、不在行内铺 <img>：一千多条画师名一次铺图会拖垮列表。
+ */
 function asmEntryRow(e, showPool) {
-  return `<button type="button" class="asm-entry"
+  const thumb = String(e.thumb_url || '');
+  const eye = thumb
+    ? `<span class="asm-entry-eye" title="悬停看这位画师的风格样图">图</span>` : '';
+  const cover = thumb
+    ? ` data-thumb-url="${esc(thumb)}" data-thumb-name="${esc(e.label)}"` : '';
+  return `<button type="button" class="asm-entry${thumb ? ' has-thumb' : ''}"${cover}
     data-act="asm-pick" data-label="${esc(e.label)}" data-tags="${esc(e.tags || '')}"
     title="${esc([e.tags || '', e.pool || ''].filter(Boolean).join(' · '))}">
     <span class="asm-entry-label">${esc(cut(e.label, 42))}</span>
+    ${eye}
     ${showPool ? `<span class="asm-entry-pool">${esc(cut(e.pool, 16))}</span>` : ''}
   </button>`;
 }
@@ -389,7 +401,8 @@ function asmPickerHtml(key) {
         data-act="asm-mode" data-v="random">随机</button>
       <button type="button" class="chip${cfg && cfg.mode === 'off' ? ' on' : ''}"
         data-act="asm-mode" data-v="off">关闭</button>
-      <span class="hint" style="flex:1">点条目即固定，之后每抽都不变</span>
+      <span class="hint" style="flex:1">点条目即固定，之后每抽都不变${
+        kind === '画师' ? '；带「图」的悬停看画风样图' : ''}</span>
       <button type="button" class="btn small" data-act="asm-close">收起</button>
     </div>
     <div class="row asm-pool-q"><input type="text" class="qf" data-asm-pool-q
@@ -897,6 +910,59 @@ function onCoverOut(e) {
   if (!el || (e.relatedTarget && el.contains(e.relatedTarget))) return;
   delete el.dataset.coverActive;
   hideCover(el);
+}
+
+// ---------------- 画师样图浮层：名字判断不了画风，得看图 ----------------
+// 条目列表在 `overflow:auto` 的小盒子里，浮层挂在行内会被裁掉，挂在 .draw-side
+// （同样 overflow:auto）也会被裁。所以浮层单独挂在 body 上，用 position:fixed
+// 按行的位置定位——滚列表时直接收起来，不做跟随（跟随要每帧算位置，不值）。
+const THUMB_POP_W = 198;
+const THUMB_POP_H = 224;
+let thumbPop = null;
+
+function thumbPopEl() {
+  if (thumbPop && thumbPop.isConnected) return thumbPop;
+  thumbPop = document.createElement('div');
+  thumbPop.className = 'thumb-pop';
+  thumbPop.hidden = true;
+  document.body.appendChild(thumbPop);
+  return thumbPop;
+}
+
+function showThumbPop(el) {
+  const url = String(el.dataset.thumbUrl || '');
+  if (!url) return;
+  const pop = thumbPopEl();
+  if (pop.dataset.url !== url) {
+    pop.dataset.url = url;
+    pop.innerHTML = `<img src="${esc(url)}" alt="${esc(el.dataset.thumbName || '画师')} 的风格样图">`;
+  }
+  pop.hidden = false;
+  const r = el.getBoundingClientRect();
+  // 优先放右栏外侧；右边没地方就翻到左边，再夹进视口，别跑出屏幕。
+  let left = r.right + 10;
+  if (left + THUMB_POP_W > window.innerWidth - 8) left = r.left - THUMB_POP_W - 10;
+  left = Math.max(8, Math.min(left, window.innerWidth - THUMB_POP_W - 8));
+  const top = Math.max(8, Math.min(r.top - 12, window.innerHeight - THUMB_POP_H - 8));
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.top = `${Math.round(top)}px`;
+}
+
+function hideThumbPop() {
+  if (!thumbPop) return;
+  thumbPop.hidden = true;
+  thumbPop.dataset.url = '';
+}
+
+function onThumbOver(e) {
+  const el = e.target.closest ? e.target.closest('[data-thumb-url]') : null;
+  if (el) showThumbPop(el);
+}
+
+function onThumbOut(e) {
+  const el = e.target.closest ? e.target.closest('[data-thumb-url]') : null;
+  if (!el || (e.relatedTarget && el.contains(e.relatedTarget))) return;
+  hideThumbPop();
 }
 
 // ---------------- 状态栏立绘：常驻一张，按概念 key 缓存 ----------------
@@ -2218,6 +2284,12 @@ async function boot() {
   view.addEventListener('mouseout', onCoverOut);
   view.addEventListener('focusin', onCoverOver);
   view.addEventListener('focusout', onCoverOut);
+  view.addEventListener('mouseover', onThumbOver);
+  view.addEventListener('mouseout', onThumbOut);
+  view.addEventListener('focusin', onThumbOver);
+  view.addEventListener('focusout', onThumbOut);
+  // 列表一滚，fixed 浮层就与行错位了：直接收起，等下一次悬停
+  window.addEventListener('scroll', hideThumbPop, true);
   document.querySelectorAll('#nav button').forEach((b) =>
     b.addEventListener('click', () => { location.hash = '#' + b.dataset.view; }));
   window.addEventListener('hashchange', onRoute);

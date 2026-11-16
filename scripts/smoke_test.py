@@ -278,6 +278,35 @@ def main() -> int:
               scoped["pool"] == "角色" and any("asuna" in x["value"] for x in scoped["items"]),
               f"{scoped['pool']} / {len(scoped['items'])} 项")
 
+        print("-- 画师图鉴：条目名 → 风格样图 --")
+        # 文件名是 `<序号>_<原 tag>_result.png`，池里的 tag 带 `artist:` / `rib:` 前缀，
+        # 归一化必须两边都能对上，否则一千多条名字里大部分都查不到图。
+        from backend.app.core import semantics as sem_core
+        check("画师名归一：前缀两种写法都认",
+              sem_core._norm_artist("artist:satou daiji") == "satou daiji"
+              and sem_core._norm_artist("artist:satou daiji", keep_prefix=True)
+              == "artistsatou daiji"
+              and sem_core._norm_artist("rib:y\\\\(uhki\\\\)", keep_prefix=True)
+              == "riby(uhki)",
+              "artist:/rib: 前缀 + 反斜杠括号")
+        art = c.get("/api/pools/items", params={
+            "kind": "画师", "pool": "画师图鉴", "limit": 60}).json()["data"]
+        with_thumb = [i for i in art["items"] if i.get("thumb_url")]
+        check("画师条目带风格样图地址（只给配得上的）",
+              len(with_thumb) >= len(art["items"]) // 2,
+              f"{len(with_thumb)}/{len(art['items'])} 条")
+        if with_thumb:
+            tr = c.get(with_thumb[0]["thumb_url"])
+            check("样图可取（只读白名单，非任意路径）",
+                  tr.status_code == 200
+                  and tr.headers.get("content-type", "").startswith("image/"),
+                  f"HTTP {tr.status_code} / {len(tr.content) // 1024} KB")
+        else:
+            check("样图可取（只读白名单，非任意路径）", False, "没有带样图的条目")
+        miss = c.get("/api/semantics/artist-thumb", params={"name": "zzz-no-such-artist"})
+        check("查不到样图返回 404，不猜路径", miss.status_code == 404,
+              f"HTTP {miss.status_code}")
+
         print("-- 抽卡与复现 --")
         body = {"recipe_id": recipes[0]["id"], "pulls": 3, "seed": 42}
         s1 = c.post("/api/draw-sessions", json=body).json()["data"]
