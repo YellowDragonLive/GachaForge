@@ -536,3 +536,17 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
 .asm-pool-q .qf { flex: 1 1 120px; }
 /* 被筛掉的元素必须真的消失：chip / 按钮自带 display，单靠 [hidden] 会被盖掉 */
 [data-qtext][hidden] { display: none; }
+
+/* ---------------- 抽卡池：池里没有的词也能当条目 ---------------- */
+/* 搜索框同时是「自造 tag」的入口。命中时它是条退路（没找到？），零命中时加重成
+   唯一出路 —— 直接把这个词当一个 tag 写进 prompt，不查池子。 */
+.asm-free { display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 6px;
+  padding: 6px 9px; border: 1px dashed var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--muted); font-size: 11.5px;
+  text-align: left; cursor: pointer; }
+.asm-free:hover { border-color: var(--primary); color: var(--primary); }
+.asm-free.strong { border-style: solid; border-color: var(--primary);
+  background: var(--primary-soft); color: var(--primary); font-weight: 500; }
+.asm-free-k { flex: none; opacity: .8; }
+/* 手填值的格子：实线换成双虚线一点的分隔感，和「从池里点的条目」区分开 */
+.part.is-free.m-locked { border-style: dashed; box-shadow: inset 0 0 0 2px var(--surface); }

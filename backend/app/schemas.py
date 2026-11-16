@@ -63,6 +63,9 @@ class Slot(BaseModel):
     filter: str = ""
     # 锁定到具体条目（按 label 匹配）：填了就取这一条、不随机，也不吃 filter。
     pick: str = ""
+    # 手填的任意值（不局限于池子）：填了就按原文写进 prompt，不查池子、不吃 filter。
+    # 与 pick 互斥，run_recipe 优先认 free —— 池里改过名、外来的词、自造 tag 都靠它。
+    free: str = ""
 
 
 class RecipeDefinition(BaseModel):

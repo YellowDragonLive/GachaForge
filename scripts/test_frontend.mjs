@@ -742,6 +742,32 @@ const cases = [
     const ranked = W.rankPools(pools, '画师', 'artist');
     assert.equal(ranked[0].name, '画师图鉴', `第一个应是画师图鉴，实际 ${ranked[0].name}`);
   }],
+  ['任意值：free 与 pick 互斥，都能进配方槽位', () => {
+    const scene = W.makeScene();
+    // free/pick 都是槽位级概念，用场景两格验证即可（人物格同一套代码）
+    scene.artist = { kind: '画师', mode: 'locked', pick: '', free: 'zzz custom artist', tags: 'zzz custom artist' };
+    scene.style = { kind: '风格', mode: 'locked', pick: '油画', free: '', tags: 'oil painting' };
+    const def = W.assemblyToDefinition({ scene, people: [] });
+    const hair = def.slots.find((s) => s.pool === '画师');
+    const style = def.slots.find((s) => s.pool === '风格');
+    assert.equal(hair.free, 'zzz custom artist', '手填值要走 slot.free');
+    assert.ok(!('pick' in hair) || !hair.pick, '手填值不许同时写 pick（后端优先认 free）');
+    assert.equal(style.pick, '油画');
+    assert.ok(!('free' in style) || !style.free, '池里点的条目不许带 free');
+  }],
+  ['任意值接线：选择器里有「直接写进 prompt」的入口', () => {
+    const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+    assert.match(app, /data-act="asm-free"/, '自由值按钮要存在');
+    assert.match(app, /asmPick\(btn\.dataset\.v, btn\.dataset\.v, true\)/, '点它走同一套锁定逻辑');
+    assert.match(app, /asmFreeRowHtml\(\)/, '按钮要随条目刷新');
+    assert.match(app, /cfg\.free = free \? String\(label \|\| ''\)\.trim\(\) : ''/, 'pick 与 free 互斥');
+    const py = readFileSync(new URL('../backend/app/core/recipes.py', import.meta.url), 'utf8');
+    assert.match(py, /slot\.get\("free"\)/, '后端 run_recipe 要认 free');
+    const schemas = readFileSync(new URL('../backend/app/schemas.py', import.meta.url), 'utf8');
+    assert.match(schemas, /free: str = ""/, 'Slot schema 要放行 free 字段（否则 Pydantic 静默丢弃）');
+    const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
+    assert.match(css, /\.part\.is-free\.m-locked/, '手填值的格子要有视觉区分');
+  }],
   ['画师接线：场景面板与卡池搜索都真接上了', () => {
     const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
     assert.match(app, /part\('artist', '画师'/, '场景面板要画出画师格');

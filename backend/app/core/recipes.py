@@ -167,9 +167,16 @@ def run_recipe(recipe: dict[str, Any], all_pools: list[PoolData], rng) -> dict:
             continue
         pools = resolve_pools(name or "", all_pools)
         filtered = apply_filter_spec(pools, slot.get("filter", ""))
+        free = str(slot.get("free") or "").strip()
         pick = str(slot.get("pick") or "").strip()
         locked: list[str] = []
-        if pick:
+        if free:
+            # 手填的任意值：不查池子，也不吃 filter。池里没有的东西一样要能用——
+            # 自造词、外部画师名、`(masterpiece:1.2)` 这类 A1111 语法都走这条。
+            # 权重修饰符不在这里剥，统一由出口的 strip_weights 处理（规则只写一处）。
+            tags = [t.strip() for t in free.split(",") if t.strip()]
+            locked = [free]
+        elif pick:
             # 锁定优先且不吃 filter：用户明确点了这件衣服，就不该被筛选条件再筛掉。
             tags = pick_tags(pools, pick)
             if tags is None:
@@ -187,6 +194,8 @@ def run_recipe(recipe: dict[str, Any], all_pools: list[PoolData], rng) -> dict:
             item = {"slot": name, "tags": tags}
             if locked:
                 item["locked"] = locked[0]
+            if free:
+                item["free"] = True      # 前端据此标「手填」，不和池里抽到的混在一起
             if removed_count:
                 item["dropped_count_tags"] = removed_count
             detail.append(item)

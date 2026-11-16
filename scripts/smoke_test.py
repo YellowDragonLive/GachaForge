@@ -245,6 +245,22 @@ def main() -> int:
               any(it.get("stripped_weight") and it.get("raw_tags")
                   for p in pv for it in p.get("detail", [])))
 
+        # 任意值（free）：池里没有的词也要能出图 —— 自造 tag、外部画师名都走这条
+        pv_free = c.post("/api/recipes/preview", params={"pulls": 2, "seed": 5}, json={
+            "fixed_head": "masterpiece, best quality", "count_tags": "1girl",
+            "slots": [{"pool": "画师", "free": "my custom artist"},
+                      {"pool": "发型", "free": "silver hair, long hair"},
+                      {"pool": "表情", "pick": "smile"}],
+        }).json()["data"]
+        prompts_free = [p["prompt"] for p in pv_free]
+        check("任意值直接写进 prompt（不查池子）",
+              bool(prompts_free) and all("my custom artist" in x and "silver hair" in x
+                                         for x in prompts_free),
+              prompts_free[0][:80] if prompts_free else "无")
+        check("任意值明细标 free、与锁定条目共存",
+              any(it.get("free") and it.get("locked") for p in pv_free for it in p.get("detail", []))
+              and all("smile" in x for x in prompts_free))
+
         # 点选控件的数据源：路由必须排在 /{pool_id} 之前，否则会被 int 校验吞掉变 422
         hot = c.get("/api/pools/tag-suggest?limit=20")
         hot_data = hot.json()["data"] if hot.status_code == 200 else {}

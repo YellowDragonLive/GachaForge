@@ -298,14 +298,17 @@ function asmPersonCard(p, idx) {
 function asmPartHtml(cfg, { label, key, uid, scope = 'person', open, side = '' }) {
   const c = cfg || { mode: 'off', pick: '', kind: '' };
   const mode = c.mode || 'random';
-  const val = mode === 'locked' ? (c.pick || '已锁定')
+  // 锁定的值有两种来源：从池里点的条目（pick）和用户手写的任意值（free）。
+  // 手填值挂 is-free，格子上用不同边框区分——一眼看出「这个不是池里的东西」。
+  const hand = mode === 'locked' && !c.pick && !!c.free;
+  const val = mode === 'locked' ? (c.pick || c.free || '已锁定')
     : (mode === 'off' ? '关闭' : '随机');
   const attrs = scope === 'scene'
     ? `data-scope="scene" data-key="${key}"`
     : `data-scope="person" data-uid="${uid}" data-key="${key}"`;
-  return `<button type="button" class="part m-${mode}${open ? ' open' : ''}${side ? ' side-' + side : ''}"
+  return `<button type="button" class="part m-${mode}${open ? ' open' : ''}${hand ? ' is-free' : ''}${side ? ' side-' + side : ''}"
     data-act="asm-open" ${attrs}
-    title="${esc(`${label}：${val}`)}">
+    title="${esc(`${label}：${val}${hand ? '（手填）' : ''}`)}">
     <span class="part-k"><i class="stat-dot"></i>${esc(label)}</span>
     <span class="part-v">${esc(mode === 'locked' ? cut(val, 20) : val)}</span>
   </button>`;
@@ -393,11 +396,31 @@ function asmPickerHtml(key) {
     <div class="row" style="margin-top:6px">
       <select class="asm-pool" data-act="asm-pool" title="全部 ${ranked.length} 池">${asmPoolOptionsHtml(ranked, picked)}</select>
       <input type="text" class="asm-q" data-act="asm-q" value="${esc(a.pickerQ)}"
-        placeholder="搜条目（多为英文，如 shirt / flower）">
+        placeholder="搜条目，也可直接写任意 tag（英文，不限池子）"
+        title="池里的条目点一下就锁定；池里没有的词，用下面那颗「直接写进 prompt」">
     </div>
     <div class="asm-entries">${asmEntriesHtml()}</div>
+    <div class="asm-free-slot">${asmFreeRowHtml()}</div>
     <div class="hint asm-count">${asmCountHtml()}</div>
   </div>`;
+}
+
+/**
+ * 「池里没有的东西也要能用」：把搜索框里的词直接写成 prompt 的一个 tag。
+ * 只打过字才出现 —— 空着时它是纯噪音 + 白占一行高度。
+ * 有命中时是「没找到？」，零命中时加重（池里根本不存在，这是唯一出路）。
+ */
+function asmFreeRowHtml() {
+  const a = state.assembly;
+  const q = String(a.pickerQ || '').trim();
+  if (!q) return '';
+  const n = (a.entries || []).length;
+  const k = n ? '没找到？' : '池里没有';
+  return `<button type="button" class="asm-free${n ? '' : ' strong'}"
+    data-act="asm-free" data-v="${esc(q)}"
+    title="不查池子，直接把这段文字当一个 tag 写进 prompt（逗号可分隔多个）">
+    <span class="asm-free-k">${k}</span>把「${esc(cut(q, 40))}」直接写进 prompt
+  </button>`;
 }
 
 /** 下拉兜底：chip 行只摆前 8 个匹配池，剩下的都在这里，选哪池都行。
@@ -506,8 +529,11 @@ async function asmLoadEntries() {
   } finally {
     if (a.picking === token) a.entriesLoading = false;
   }
-  // 只更新列表与计数，不重建输入框：否则打字时每次都失焦
+  // 只更新列表与计数，不重建输入框：否则打字时每次都失焦。
+  // 自由值按钮跟着命中数变文案（没找到？/ 池里没有），也在这里同步。
   if (box) box.innerHTML = asmEntriesHtml();
+  const freeSlot = $('.asm-free-slot');
+  if (freeSlot) freeSlot.innerHTML = asmFreeRowHtml();
   const cnt = $('.asm-count');
   if (cnt) cnt.textContent = asmCountHtml();
 }
@@ -522,13 +548,16 @@ async function asmSetMode(mode) {
 }
 
 /** 锁定到具体条目。锁角色时顺手按条目里的人数 tag 校正性别，避免 1girl + 男角色的冲突。 */
-async function asmPick(label, tags) {
+async function asmPick(label, tags, free = false) {
   const cfg = asmCurrentCfg();
   if (!cfg) return;
   const pk = state.assembly.picking;
   cfg.mode = 'locked';
-  cfg.pick = String(label || '');
-  cfg.tags = String(tags || '');
+  // free = 用户手写的任意值：不进池子查，pick 留空（后端按 free 直接写 prompt）。
+  // pick 与 free 必须互斥，否则「池里改了名」和「我手写的词」会混成一笔糊涂账。
+  cfg.free = free ? String(label || '').trim() : '';
+  cfg.pick = free ? '' : String(label || '');
+  cfg.tags = free ? cfg.free : String(tags || '');
   if (pk && pk.scope === 'person' && pk.key === 'role') {
     const p = state.assembly.people.find((x) => x.uid === pk.uid);
     // 判断性别要看英文 tags：label 是中文（「艾比蓋兒·威廉斯 (旅行服)」），拿它匹配 1girl 永远匹配不到。
@@ -1736,6 +1765,8 @@ async function onClick(e) {
       }
       case 'asm-mode': await asmSetMode(btn.dataset.v); break;
       case 'asm-pick': await asmPick(btn.dataset.label, btn.dataset.tags); break;
+      // 手填值：同一套锁定逻辑，只是 tags 不来自池子
+      case 'asm-free': await asmPick(btn.dataset.v, btn.dataset.v, true); break;
       // --- 过滤构造器：三种输入方式共用一条表达式，全程点选 ---
       case 'filter-mode': await setFilterMode(btn.dataset.v); break;
       case 'tune-open': await openTuning(); break;
