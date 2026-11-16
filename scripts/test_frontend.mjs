@@ -114,7 +114,10 @@ const cases = [
   ['抽卡台接线：状态持久化 + 过滤提示 + 不再直接 join', () => {
     const app = frontendSrc();
     for (const needle of [
-      "import { esc, cut, slotChips } from './detail.js'",
+      // 拆模块后 import 由脚本自动生成，名字顺序不再固定：按「detail 三件套都被 import」断言
+      /import \{[^}]*\besc\b[^}]*\} from '.*detail\.js'/,
+      /import \{[^}]*\bcut\b[^}]*\} from '.*detail\.js'/,
+      /import \{[^}]*\bslotChips\b[^}]*\} from '.*detail\.js'/,
       'slotChips(d.detail)',
       'state.form =',
       "view.addEventListener('input', onInput)",
@@ -126,7 +129,8 @@ const cases = [
       'function filterHintText()',
       'function updateFilterHint()',
     ]) {
-      assert.ok(app.includes(needle), `app.js 缺少接线：${needle}`);
+      const ok = needle instanceof RegExp ? needle.test(app) : app.includes(needle);
+      assert.ok(ok, `app.js 缺少接线：${needle}`);
     }
     assert.doesNotMatch(app, /\.tags\.join\(/, '不得再对 tags 直接调用 join');
     assert.doesNotMatch(app, /id="dPulls" value="3"/, '表单值不得写死为默认值');
