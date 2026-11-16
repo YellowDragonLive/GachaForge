@@ -108,7 +108,7 @@ const cases = [
       'sessionStorage.setItem(LAST_SESSION_KEY',
       'await restoreLastDraw()',
       'state.warnings = data.warnings || []',
-      'sessionStorage.setItem(FORM_KEY',
+      'persistForm(state)',
       'restoreForm()',
       'function filterHintText()',
       'function updateFilterHint()',
@@ -117,6 +117,14 @@ const cases = [
     }
     assert.doesNotMatch(app, /\.tags\.join\(/, '不得再对 tags 直接调用 join');
     assert.doesNotMatch(app, /id="dPulls" value="3"/, '表单值不得写死为默认值');
+    // 持久化收口到 state.js：修掉 readDrawForm 整体替换 state.form 丢 filterMode 的 bug
+    const st = readFileSync(new URL('../frontend/state.js', import.meta.url), 'utf8');
+    assert.match(st, /export function persistForm/, '持久化有唯一出口');
+    assert.match(st, /Object\.assign\(state\.form, saved\)/,
+      '恢复表单是逐字段合并，不是整体替换（否则 filterMode 会丢）');
+    assert.match(st, /export function createState/, '状态定义集中在一处');
+    assert.ok(!/state\.route|state\.currentView/.test(app),
+      '视图状态只有一份 state.view，不再 currentView/route 双份');
   }],
   ['过滤表达式：解析 / 追加去重 / 删除', () => {
     assert.deepEqual(W.parseFilterSpec('角色:asuna, fate'), [

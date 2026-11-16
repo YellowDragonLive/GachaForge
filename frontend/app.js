@@ -4,6 +4,8 @@ import { esc, cut, slotChips } from './detail.js';
 import { SAMPLERS, SCHEDULERS, profileDraft, tuningWorkflowHtml,
   settingsWorkflowHtml, modelExtraFields, tuningBody, settingsBody,
   loraPickerHtml } from './features/generation.js';
+import { LAST_SESSION_KEY, FORM_KEY, ASM_KEY, createState, persistForm,
+  restoreForm as restoreFormState, debounce } from './state.js';
 import {
   parseFilterSpec, addFilter, removeFilter, missingFilterSlots,
   filterChipsHtml, hotTagChipsHtml,
@@ -22,53 +24,9 @@ import {
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
 const num = (v, d) => (v === '' || v === undefined || v === null ? d : Number(v));
-const LAST_SESSION_KEY = 'gacha_last_session';
-const FORM_KEY = 'gacha_draw_form';
-const ASM_KEY = 'gacha_assembly_v2';   // v2：默认全关。旧 key 里的「默认随机」不能复活
 let asmTimer = null;
 
-const state = {
-  recipes: [], profiles: [], pools: [], batches: [], jobs: [], images: [],
-  config: {}, comfy: {}, models: {}, session: null, draws: [], warnings: [],
-  currentView: 'draw', route: 'draw', editingRecipe: null, openPool: null,
-  // 结果卡片内联状态：draw_id → 最新任务 / 已出图片（抽完即看，不必跳任务队列或画廊）
-  drawJobs: {}, drawImages: {},
-  // 参数预设就地编辑：高频调参不再占一个一级页面
-  tuning: false, tuneDraft: null,
-  // 设置页正在编辑的预设 id：null = 新建草稿。之前写死 profiles[0]，其余预设永远改不了
-  settingsPid: null,
-  gallery: { favorite: '', origin: '', min_rating: 0 },
-  // 装配面板：人数 = 人物卡片张数，0 张即无人。所有格子默认关闭（白纸起步），
-  // 用户主动打开哪格，哪格才进 prompt。
-  assembly: {
-    enabled: true,          // false = 改用配方模式（保留原有能力）
-    tab: 'people',          // 'people' | 'scene'
-    people: [makePerson(1)],
-    scene: makeScene(),
-    nextUid: 2,
-    picking: null,          // {uid, key}：正在为哪一格的哪个人物挑条目（null 表示未展开）
-    entries: [], entriesTotal: 0, entriesLoading: false,
-    pickerPool: '', pickerQ: '', pickerPoolQ: '', pickerLocked: false,
-  },
-  // 意群双语补全的临时 UI 态：不进装配数据、不持久化。
-  // 输入中/英文 → 候选 → 选中写英文 tag 到该意群的 extra。
-  vocab: { ready: null, items: [], q: '', scope: '', uid: 0, open: false, loading: false },
-  form: { recipe_id: '', pulls: 3, count: 1, seed: '', filter: '',
-    gen_profile_id: '', filterMode: 'pool' },
-  // 可选控件的编辑态：过滤构造器 / LoRA 列表 / 配方槽位表
-  filterPool: null, filterTagQ: '', tagOptions: [], hotTags: [],
-  loraDraft: [], slotsDraft: [],
-  // 概念缩略图：数据库驱动的概念墙 + 本地语义检索（索引未构建时静默降级）
-  concepts: { items: [], kinds: [], kind: '', q: '', image_count: 0, loaded: false },
-  semantics: { ready: null, reason: '', items: [], q: '', mode: '' },
-  conceptThumbMap: {},
-  // 封面按需加载：按概念 key 缓存，新图产出后整体失效
-  covers: { cache: {}, pending: {} },
-  // 状态栏立绘：概念 key → 封面。与 covers 分开，立绘是常驻显示的，不走 hover 浮层。
-  portraits: {},
-  conceptPage: { key: '', label: '', kind: '', pool: '', items: [], total: 0, offset: 0 },
-};
-
+const state = createState();
 let toastTimer = null;
 function toast(msg, kind = '') {
   const el = $('#toast');
@@ -82,7 +40,7 @@ const fail = (e) => toast(friendlyError(e), 'err');
 const done = (msg) => toast(msg, 'ok');
 
 function setNav(v) {
-  state.currentView = v;
+  state.view = v;
   document.querySelectorAll('#nav button').forEach((b) =>
     b.classList.toggle('active', b.dataset.view === v));
 }
@@ -836,8 +794,7 @@ function filterPaneHtml(mode) {
 async function setFilterMode(mode) {
   if (!['pool', 'concept', 'feel'].includes(mode)) return;
   state.form.filterMode = mode;
-  sessionStorage.setItem(FORM_KEY,
-    JSON.stringify({ ...state.form, filterPool: state.filterPool }));
+  persistForm(state);
   await renderDraw();
   if (mode === 'concept' && !state.concepts.loaded) await loadConcepts();
 }
@@ -902,8 +859,7 @@ async function saveTuning() {
   state.profiles = await api.get('/api/gen-profiles');
   state.form.gen_profile_id = String(saved.id);
   state.tuning = false;
-  sessionStorage.setItem(FORM_KEY,
-    JSON.stringify({ ...state.form, filterPool: state.filterPool }));
+  persistForm(state);
   await renderDraw();
   done(`参数已保存并应用：${saved.name} · ${saved.steps} 步 / CFG ${saved.cfg}`);
 }
@@ -1172,7 +1128,7 @@ function setFilterSpec(spec) {
   if (el) el.value = spec;
   syncTagControls();
   updateFilterHint();
-  sessionStorage.setItem(FORM_KEY, JSON.stringify({ ...state.form, filterPool: state.filterPool }));
+  persistForm(state);
 }
 
 /** 把抽卡台表单当前值同步进 state，任何重绘都不再丢失选择。 */
@@ -1186,7 +1142,7 @@ function readDrawForm() {
   };
   const poolEl = $('#dFilterPool');
   if (poolEl) state.filterPool = poolEl.value;
-  sessionStorage.setItem(FORM_KEY, JSON.stringify({ ...state.form, filterPool: state.filterPool }));
+  persistForm(state);
   updateFilterHint();
   const chips = $('#filterChips');
   if (chips) chips.innerHTML = filterChipsHtml(state.form.filter);
@@ -1194,19 +1150,13 @@ function readDrawForm() {
 
 /** 刷新页面后连表单选择一起恢复，避免「刚填的过滤条件又没了」。 */
 function restoreForm() {
-  try {
-    const raw = sessionStorage.getItem(FORM_KEY);
-    if (raw) {
-      const saved = JSON.parse(raw);
-      state.form = { ...state.form, ...saved };
-      if (saved.filterPool !== undefined) state.filterPool = saved.filterPool;
-    }
-  } catch (_) { /* 坏数据忽略，用默认表单 */ }
+  restoreFormState(state);
+  // 过滤模式 IV：filterMode 必须是合法值，否则回落按池
+  if (!['pool', 'concept', 'feel'].includes(state.form.filterMode)) {
+    state.form.filterMode = 'pool';
+  }
 }
 
-/** 结果卡：状态与图直接长在卡片上，抽完就能看到，不必跳任务队列或画廊。
- *  prompt 收进折叠区——3 抽并排时长 textarea 会把图挤出首屏。 */
-/** 任务状态：一抽就是一张任务卡，徽标与描边都跟着它变，不用切页面看队列。 */
 function questState(d) {
   const job = state.drawJobs[d.id];
   const imgs = state.drawImages[d.id] || [];
@@ -1337,7 +1287,7 @@ async function refreshDrawStates(ids) {
       state.drawImages[row.draw_id] = row.images;
     }
   }
-  if (state.route === 'draw') list.forEach(updateDrawCard);
+  if (state.view === 'draw') list.forEach(updateDrawCard);
 }
 
 async function renderDraw() {
@@ -1453,7 +1403,7 @@ async function submitJobs(ids, opts = {}) {
     state.drawJobs[did] = { ...(state.drawJobs[did] || {}),
       draw_id: did, status: 'queued', progress: 0 };
   });
-  if (state.route === 'draw') list.forEach(updateDrawCard);
+  if (state.view === 'draw') list.forEach(updateDrawCard);
   if (!opts.silent) {
     done(`已提交 ${data.created.length} 个任务` +
       `${data.reused.length ? `，复用 ${data.reused.length} 个` : ''}`);
@@ -2000,7 +1950,7 @@ async function onClick(e) {
         const rating = act === 'img-rate' ? Number(btn.dataset.v) : null;
         const fav = act === 'img-fav' ? btn.dataset.v === '1' : null;
 
-        if (state.route === 'concept') {
+        if (state.view === 'concept') {
           const item = state.conceptPage.items.find((x) => x.id === id);
           if (item) {
             if (rating !== null) item.rating = rating;
@@ -2008,7 +1958,7 @@ async function onClick(e) {
           }
           view.innerHTML = conceptDetailHtml(state.conceptPage);
         } else {
-          const lists = state.route === 'gallery'
+          const lists = state.view === 'gallery'
             ? [state.images] : Object.values(state.drawImages);
           for (const list of lists) {
             const im = list.find((x) => x.id === id);
@@ -2025,7 +1975,7 @@ async function onClick(e) {
             });
           }
           const did = Number(btn.dataset.draw);
-          if (state.route === 'draw' && did) updateDrawCard(did);
+          if (state.view === 'draw' && did) updateDrawCard(did);
         }
         done(act === 'img-rate' ? '评分已保存' : '收藏已更新');
         break;
@@ -2185,8 +2135,7 @@ async function onClick(e) {
         state.profiles = await api.get('/api/gen-profiles');
         if (String(state.form.gen_profile_id) === String(pid)) state.form.gen_profile_id = '';
         state.settingsPid = null;
-        sessionStorage.setItem(FORM_KEY,
-          JSON.stringify({ ...state.form, filterPool: state.filterPool }));
+        persistForm(state);
         done('预设已删除'); await renderSettings(); break;
       }
       case 'profile-save': {
@@ -2204,7 +2153,7 @@ async function onRoute() {
   const raw = (location.hash.slice(1) || 'draw').replace(/^\//, '');
   if (raw.startsWith('concept/')) {
     setNav('draw');
-    state.route = 'concept';
+    state.view = 'concept';
     try {
       await renderConceptPage(decodeURIComponent(raw.slice(8)));
     } catch (err) {
@@ -2217,7 +2166,7 @@ async function onRoute() {
   let v = raw;
   if (!['draw', 'pools', 'recipes', 'jobs', 'gallery', 'settings'].includes(v)) v = 'draw';
   setNav(v);
-  state.route = v;
+  state.view = v;
   try {
     if (v === 'draw') await renderDraw();
     else if (v === 'pools') await renderPools();
@@ -2370,17 +2319,17 @@ function startStream() {
         const ids = Array.isArray(ev.image_ids) ? ev.image_ids : [];
         // 事件里已带 image_ids：先直接上图，再异步补齐宽高/评分等字段
         if (ids.length) state.drawImages[did] = ids.map((id) => ({ id, rating: 0, favorite: false }));
-        if (state.route === 'draw') {
+        if (state.view === 'draw') {
           updateDrawCard(did);
           refreshDrawStates([did]).then(() => updateDrawCard(did)).catch(() => {});
         }
-      } else if (state.route === 'draw') {
+      } else if (state.view === 'draw') {
         updateDrawCard(did);
       }
     }
 
-    if (state.currentView === 'jobs') refreshJobsBody();
-    if (ev.status === 'succeeded' && state.currentView === 'gallery') {
+    if (state.view === 'jobs') refreshJobsBody();
+    if (ev.status === 'succeeded' && state.view === 'gallery') {
       renderGallery().catch(fail);
     }
   }, (ok) => {
