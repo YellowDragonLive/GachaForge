@@ -881,6 +881,18 @@ def main() -> int:
               and "--kill" in probe_src
               and "taskkill" in probe_src
               and 'run_server.py" in cmd' in probe_src)
+        clean_bat = ROOT / "scripts" / "clean.bat"
+        clean_src = clean_bat.read_text(encoding="utf-8") if clean_bat.is_file() else ""
+        check("clean.bat 双击入口：先停服务、默认预览、确认后才 --yes",
+              clean_bat.is_file()
+              and "scripts\\probe_server.py --kill" in clean_src
+              and '"%PY%" scripts\\clean_db.py --yes' in clean_src
+              and "choice /C YN" in clean_src
+              and "if not \"%~1\"==\"\" goto :args" in clean_src)
+        check("clean.bat 是 CRLF 行尾（cmd 才不会拆错多行块）",
+              clean_bat.is_file()
+              and b"\r\n" in clean_bat.read_bytes()
+              and b"\n" not in clean_bat.read_bytes().replace(b"\r\n", b""))
         vd = ROOT / "vendor" / "pydeps"
         check("本机依赖已搬入 vendor/pydeps",
               (vd / "onnxruntime" / "__init__.py").is_file()
