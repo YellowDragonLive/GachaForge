@@ -450,6 +450,35 @@ def main() -> int:
         check("查不到样图返回 404，不猜路径", miss.status_code == 404,
               f"HTTP {miss.status_code}")
 
+        print("-- 角色冷启动缩略图：英文 tags → 立绘参考图 --")
+        from backend.app.core import char_thumbs as ct
+        st = ct.status()
+        check("角色缩略图索引已导入（2145 张自包含 webp）",
+              st["ready"] and st["count"] >= 2000,
+              f"{st['count']} 张")
+        # 配对走英文 tags，不能用中文 label：完整 key 与单个角色名都要命中。
+        check("完整 tags / 单个角色名 / 带人数反斜杠都能查到图",
+              ct.thumb_path("vocaloid, hatsune miku, vocaloid") is not None
+              and ct.thumb_path("hatsune miku") is not None
+              and ct.thumb_path("1girl, artoria pendragon \\(fate\\)") is not None
+              and ct.thumb_path("zzz-no-such-character") is None)
+        hit = c.get("/api/semantics/character-thumb", params={"name": "hatsune miku"})
+        check("角色缩略图只读可取（image/webp，非任意路径）",
+              hit.status_code == 200
+              and hit.headers.get("content-type", "").startswith("image/"),
+              f"HTTP {hit.status_code} / {len(hit.content) // 1024} KB")
+        cmiss = c.get("/api/semantics/character-thumb", params={"name": "zzz-no-such-character"})
+        check("查不到角色缩略图返回 404", cmiss.status_code == 404,
+              f"HTTP {cmiss.status_code}")
+        role_items = c.get("/api/pools/items", params={
+            "kind": "角色", "limit": 200}).json()["data"]["items"]
+        role_thumb = [i for i in role_items if i.get("thumb_url")]
+        check("角色条目带冷启动图地址（用英文 tags 配对，不是中文 label）",
+              len(role_thumb) > 0
+              and all("/api/semantics/character-thumb?name=" in i["thumb_url"]
+                      for i in role_thumb),
+              f"{len(role_thumb)}/{len(role_items)} 条")
+
         print("-- 抽卡与复现 --")
         body = {"recipe_id": recipes[0]["id"], "pulls": 3, "seed": 42}
         s1 = c.post("/api/draw-sessions", json=body).json()["data"]

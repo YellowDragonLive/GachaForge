@@ -15,6 +15,7 @@ from urllib.parse import quote
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ..core import char_thumbs
 from ..core import semantics as sem_core
 from ..core import wildcards as wc_core
 from ..core.pools import Item, PoolData, discover_pools
@@ -308,20 +309,25 @@ def list_items(db: Session, *, kind: str = "", q: str = "", pool: str = "",
 
 
 def _attach_artist_thumbs(items: list[dict]) -> None:
-    """画师池的条目补上「这位画师的风格样图」地址。
+    """给「能用图判断」的条目补上按需缩略图地址（有图才给，前端不会打 404）。
 
-    一千多条画师名里，`dore \\(gilles dore\\)` 这种字面量判断不了画风；
-    有样图的条目才带地址（没样图的不给，前端就不会去请求一个必然 404 的图）。
-    前端只在悬停 / 聚焦时才加载这张图，列表本身仍然零 <img>。
+    画师池看名字判断不了画风 → 用 label 找风格样图；
+    角色池的 label 是中文（「黑雪姬 (加速世界)」）找不到图 → 用英文 tags 找冷启动立绘。
+    两种都只在悬停 / 聚焦时才加载，列表本身仍然零 <img>。
     """
     for row in items:
-        if str(row.get("kind") or "") != "画师":
-            continue
-        label = str(row.get("label") or "")
-        if not label or sem_core.artist_thumb(label) is None:
-            continue
-        row["thumb_url"] = ("/api/semantics/artist-thumb?name="
-                            + quote(label, safe=""))
+        kind = str(row.get("kind") or "")
+        if kind == "画师":
+            label = str(row.get("label") or "")
+            if label and sem_core.artist_thumb(label) is not None:
+                row["thumb_url"] = ("/api/semantics/artist-thumb?name="
+                                    + quote(label, safe=""))
+        elif kind == "角色":
+            # 缩略图 key 是英文 tags（`作品, 角色, 作品`），不是中文 label。
+            tags = str(row.get("tags") or "")
+            if tags and char_thumbs.has_thumb(tags):
+                row["thumb_url"] = ("/api/semantics/character-thumb?name="
+                                    + quote(tags, safe=""))
 
 
 def add_item(db: Session, pool_id: int, data: dict) -> PoolItem:

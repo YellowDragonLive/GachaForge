@@ -30,6 +30,8 @@ data/archive/
 # 语义索引与本地模型权重：可重建、体积大，不进版本库
 data/semantics/
 data/models/
+# 角色冷启动缩略图：由 scripts/import_character_thumbs.py 从外部 JSON 重建
+data/char_thumbs/
 logs/
 *.log
 *.bak

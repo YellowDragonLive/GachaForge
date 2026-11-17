@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from ..core import semantics
+from ..core import char_thumbs, semantics
 from ..db import get_db
 from ..errors import AppError, ok
 from ..services import concepts
@@ -65,4 +65,18 @@ def artist_thumb(name: str = Query(..., min_length=1)):
     if p is None:
         raise AppError("这个画师没有风格样图", code="thumb_not_found", status=404)
     return FileResponse(str(p), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
+@router.get("/character-thumb")
+def character_thumb(name: str = Query(..., min_length=1)):
+    """角色条目 tags / 角色名 → 冷启动立绘（只读，路径来自 char_thumbs 索引白名单）。
+
+    没出过图的角色在概念墙里没有封面，用外部角色选择器的缩略图补一张，
+    让状态栏不至于只有线稿。真实出图后概念封面优先，这里只当冷启动补充。
+    """
+    p = char_thumbs.thumb_path(name)
+    if p is None:
+        raise AppError("这个角色没有冷启动缩略图", code="thumb_not_found", status=404)
+    return FileResponse(str(p), media_type="image/webp",
                         headers={"Cache-Control": "public, max-age=86400"})

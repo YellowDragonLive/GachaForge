@@ -118,11 +118,36 @@ export function onThumbOut(e) {
 
 // ---------------- 状态栏立绘：常驻一张，按概念 key 缓存 ----------------
 // 和 hover 浮层不同：立绘是状态栏的一部分，必须一直在，才能和右栏出的图并排比对。
+// 两轮取图：先找真实出过的概念封面（最可信），没有再回退到外部角色的冷启动缩略图。
+// 后者是「这个角色长什么样」的参考，不是它出过的图，所以真实封面一律优先。
+const CHAR_THUMB = '/api/semantics/character-thumb?name=';
+
+/** 冷启动缩略图是否存在：用 Image 预载，404 就当没有，绝不往 DOM 塞坏图。 */
+function loadCharThumb(key) {
+  const cacheKey = `char:${key}`;
+  if (cacheKey in state.portraits) return Promise.resolve(state.portraits[cacheKey]);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      // 只记 URL，图本身交给下面的 <img loading=lazy> 复用浏览器缓存。
+      const hit = { key, found: true, image: { url: CHAR_THUMB + encodeURIComponent(key) } };
+      state.portraits[cacheKey] = hit;
+      resolve(hit);
+    };
+    img.onerror = () => {
+      state.portraits[cacheKey] = null;   // 缓存「没有」，别对每个角色反复试
+      resolve(null);
+    };
+    img.src = CHAR_THUMB + encodeURIComponent(key);
+  });
+}
+
 export async function loadPortrait(el) {
   if (!el || el.dataset.loaded === '1') return;
   const keys = String(el.dataset.portrait || '').split(',').filter(Boolean);
   el.dataset.loaded = '1';
   if (!keys.length) return;
+  // 第一轮：真实出图的概念封面 —— 立绘的最终形态，任何补充图都不能盖过它。
   for (const key of keys) {
     if (!(key in state.portraits)) {
       try {
@@ -138,7 +163,15 @@ export async function loadPortrait(el) {
       return;
     }
   }
-  el.dataset.miss = '1';   // 这个角色还没出过图：留着占位，等第一次生成后长立绘
+  // 第二轮：一个都没出过图 → 回退到外部角色缩略图（冷启动补充）。
+  for (const key of keys) {
+    const c = await loadCharThumb(key);
+    if (c) {
+      paintPortrait(el, c);
+      return;
+    }
+  }
+  el.dataset.miss = '1';   // 这个角色既没出过图也没有参考缩略图：留着占位
 }
 
 export function paintPortrait(el, cover) {
