@@ -2,6 +2,7 @@
 import { api, jobStream, friendlyError } from './api.js';
 import { esc } from './detail.js';
 import { state } from './store.js';
+import { restoreFacets } from './state.js';
 import { restoreAssembly, asmSearchNow, asmQueryInput, asmPoolQInput, asmPoolChange } from './features/assembly.js';
 import { vocabInput, vocabKeydown, vocabBlur } from './features/vocab.js';
 import { onQuickFilterInput, onQuickFilterKey } from './features/quickfilter.js';
@@ -234,6 +235,7 @@ async function boot() {
   try {
     restoreForm();
     restoreAssembly();
+    restoreFacets(state);
     await refreshBase();
     // 首次进入默认给最常用的「角色」类别，避免点热门 tag 时生成裸关键字触发全局过滤；
     // 用户明确选过「全部卡池」后存的是 ''，不会被这里覆盖。

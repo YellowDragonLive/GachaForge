@@ -372,6 +372,10 @@ export async function doDraw({ generate = false } = {}) {
     filter: useAssembly ? '' : String(f.filter || '').trim(),
     gen_profile_id: num(f.gen_profile_id, null),
   };
+  // 池内切片：按池各记各的，空着就不传（后端按整池抽，与没有这个功能时一致）。
+  const facets = state.facets || {};
+  const picked = Object.fromEntries(Object.entries(facets).filter(([, v]) => v && v.length));
+  if (Object.keys(picked).length) body.facets = picked;
   const data = await api.post('/api/draw-sessions', body);
   state.session = data; state.draws = data.draws;
   state.warnings = data.warnings || [];

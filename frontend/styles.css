@@ -299,6 +299,34 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
   color: var(--primary); font-weight: 500; }
 .pool-chip i { font-style: normal; font-size: 9.5px; color: var(--muted); flex: none; }
 .pool-chip.on i { color: var(--primary); opacity: .75; }
+/* 能按维度细化的池挂一个小点：用户要在 chip 行上挑「哪个池能切」，
+   没有标记就只能挨个点进去试，一次一步全浪费在试探上。 */
+.pool-chip[data-facets]::after { content: ''; flex: none; width: 3px; height: 3px;
+  border-radius: 1px; background: var(--primary); opacity: .55; }
+/* 池内切片：选定池之后的第二级收窄。刻意比池 chip 弱一档（虚线 + 更小字号 +
+   左边一条竖线），否则两级 chip 长得一样，用户分不清「换池」和「在池里切」。
+   排版是「组名一列 + 档位一列」的网格而不是横滑：头发池 6 个维度、服装「类型」
+   8 个档，一行 354px 只看得见前两个，正主（「适格」= 排除光秃/机械头）反而要滑
+   3 屏才找得到。列内换行后零次滑动，换行出来的档位仍与上一行左对齐。
+   一个都不选时整行是空的，靠 :empty 收掉高度。 */
+.asm-facets { display: flex; flex-direction: column; gap: 4px;
+  margin: 5px 0 0; padding: 5px 8px 5px 7px;
+  border-left: 2px solid var(--line); }
+.asm-facets:empty { display: none; }
+.facet-group { display: grid; grid-template-columns: 3.6em 1fr; gap: 4px;
+  align-items: start; }
+.facet-g { font-size: 9.5px; color: var(--muted); line-height: 18px; }
+.facet-opts { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.facet-chip { flex: none; display: inline-flex; align-items: baseline; gap: 3px;
+  border: 1px dashed var(--line); background: transparent; color: var(--text);
+  font-size: 10.5px; line-height: 1.45; padding: 1px 6px; border-radius: 999px;
+  white-space: nowrap; }
+.facet-chip:hover { border-color: var(--primary); border-style: solid; }
+.facet-chip.on { border: 1px solid var(--primary); background: var(--primary-soft);
+  color: var(--primary); font-weight: 500; }
+.facet-chip i { font-style: normal; font-size: 9px; color: var(--muted); }
+.facet-chip.on i { color: var(--primary); opacity: .7; }
+.facet-chip.clear { border-style: solid; align-self: flex-start; }
 .asm-pool { max-width: 148px; }
 .asm-q { flex: 1; min-width: 110px; }
 .asm-entries { max-height: 190px; overflow: auto; margin-top: 7px;

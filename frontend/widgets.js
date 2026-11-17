@@ -958,10 +958,10 @@ export function poolChipsHtml(pools, kind, key, selected, limit = 8, q = '') {
   const total = ranked.reduce((s, p) => s + Number(p.item_count || 0), 0);
   // 每个 chip 前挂一枚图标：106 个池里「能穿的衣服」和「混进来的乐器」文字上分不出，
   // 图标先给一眼判断。文字从 13 字收到 11 字，把宽度让给图标。
-  const chip = (v, label, count, on, ico) => `<button type="button"
+  const chip = (v, label, count, on, ico, facets) => `<button type="button"
     class="pool-chip${on ? ' on' : ''}" data-act="asm-pick-pool" data-v="${esc(v)}"
-    data-qtext="${esc(label)} ${esc(count)}"
-    title="${esc(label)} · ${count} 条">${ico || poolIconHtml(label, kind)}<span
+    data-qtext="${esc(label)} ${esc(count)}"${facets ? ' data-facets="1"' : ''}
+    title="${esc(label)} · ${count} 条${facets ? ' · 可按维度细化' : ''}">${ico || poolIconHtml(label, kind)}<span
     class="pool-chip-n">${esc(cut(label, 11))}</span><i>${count}</i></button>`;
   // 有筛选词时不按「前 8 个匹配池」截断：搜「服装」命中的池很可能排在第 12 位，
   // 截断等于搜了没反应。改成把命中的池全摆出来（上限 30），顺序仍按部位匹配度。
@@ -980,6 +980,38 @@ export function poolChipsHtml(pools, kind, key, selected, limit = 8, q = '') {
   // 池总数写在选择器标题上（「106 池匹配」），剩下的池去下面那个下拉里找。
   return [
     chip('', words.length ? '清除筛选' : '全部', total, !selected, iconSvg(words.length ? 'close' : 'grid')),
-    ...shown.map((p) => chip(p.name, p.name, Number(p.item_count || 0), p.name === selected)),
+    ...shown.map((p) => chip(p.name, p.name, Number(p.item_count || 0), p.name === selected,
+      '', Number(p.facet_groups || 0) > 0)),
   ].join('');
+}
+
+/**
+ * 池内切片行：选中一个池后，把「这个池里的东西按维度切开」摆在条目列表上方。
+ *
+ * 512 个池里最痛的是一个池装了好几个维度：`人物-头发` 214 条混着长短 / 束法 /
+ * 质地 / 性别向。整池随机的结果就是「想画长发女孩，抽到光头」。这一行让用户
+ * 在**不离开当前池**的前提下把范围收到那一档——组内互斥、组间叠加。
+ *
+ * 一个切片都不选 = 整池，和没有这个功能时完全一样（这是零回归的关键）。
+ * 选中时行首补一颗「全部」，否则取消单选只能靠再点一次同一个 chip，不好发现。
+ */
+export function facetChipsHtml(groups, selected) {
+  const list = (groups || []).filter((g) => g && (g.options || []).length);
+  if (!list.length) return '';
+  const on = new Set(selected || []);
+  // 组名占一列、档位占一列：服装「类型」有 8 个档，一排放不下，靠列内换行而不是
+  // 整组溢出被裁——组名固定列宽后，换行出来的档位仍与上一行左对齐。
+  const group = (g) => `<span class="facet-group"><span class="facet-g">${esc(g.name)}</span>`
+    + '<span class="facet-opts">'
+    + (g.options || []).map((o) => `<button type="button"
+        class="facet-chip${on.has(o.slug) ? ' on' : ''}"
+        data-act="asm-facet" data-v="${esc(o.slug)}"
+        title="只看「${esc(o.name)}」· ${o.count} 条">${esc(o.name)}<i>${o.count}</i></button>`).join('')
+    + '</span></span>';
+  const clear = on.size
+    ? `<button type="button" class="facet-chip clear" data-act="asm-facet" data-v=""
+        title="取消全部切片，回到整池">全部</button>`
+    : '';
+  // 组名自己就是分隔符，不再插竖线：wrap 之后竖线会孤零零挂在行尾（「无发 3 |」）。
+  return clear + list.map(group).join('');
 }

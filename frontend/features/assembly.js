@@ -1,9 +1,9 @@
 import { $ } from '../core/ui.js';
 import { api, friendlyError } from '../api.js';
 import { cut, esc } from '../detail.js';
-import { ASM_KEY } from '../state.js';
+import { ASM_KEY, persistFacets } from '../state.js';
 import { state } from '../store.js';
-import { DOLL_PARTS, PERSON_SLOTS, SCENE_SLOTS, assemblyIsEmpty, countTagsFor, dollFigureHtml, makePerson, makeScene, matchQuery, personTitle, poolChipsHtml, poolSearchText, portraitKeys, queryWords, rankPools, sceneStageHtml } from '../widgets.js';
+import { DOLL_PARTS, PERSON_SLOTS, SCENE_SLOTS, assemblyIsEmpty, countTagsFor, dollFigureHtml, facetChipsHtml, makePerson, makeScene, matchQuery, personTitle, poolChipsHtml, poolSearchText, portraitKeys, queryWords, rankPools, sceneStageHtml } from '../widgets.js';
 import { refresh } from '../core/router.js';
 import { setQfCount } from './quickfilter.js';
 import { vocabSuggestHtml } from './vocab.js';
@@ -241,6 +241,72 @@ export function asmCountHtml() {
   return `共 ${a.entriesTotal || 0} 条${a.entriesTotal > 60 ? ' · 只显示前 60 条，用搜索缩小' : ''}${scope}`;
 }
 
+// ---------------- 池内切片（facet） ----------------
+// 用户口径：「随便改池子是伪需求，真正的需求是细化池子」。所以不做「排除光头」
+// 这类减法语法，而是让池自己能切：选中一个池后，把它的维度摆在条目列表上方。
+// 一个都不选 = 整池，与没有这个功能时完全一致。
+
+/** 当前池已选的切片 slug。按池各记各的，跨会话保留（localStorage）。 */
+export function asmSelectedFacets() {
+  const pool = String(state.assembly.pickerPool || '');
+  if (!pool) return [];
+  return (state.facets || {})[pool] || [];
+}
+
+/** 没有可切维度时返回空串，靠 CSS `:empty` 收掉高度，不留一条空行。 */
+export function asmFacetsHtml() {
+  const a = state.assembly;
+  if (a.facetLoading) return '<span class="hint">切片加载中…</span>';
+  return facetChipsHtml(a.facetGroups, asmSelectedFacets());
+}
+
+/** 拉当前池的切片定义。按池缓存：切回同一池不再请求。 */
+export async function asmLoadFacets() {
+  const a = state.assembly;
+  const pool = String(a.pickerPool || '');
+  a.facetGroups = [];
+  if (!pool) return;
+  const hit = (state.pools || []).find((p) => p.name === pool);
+  if (!hit || !hit.id) return;
+  if (a.facetCache[pool]) { a.facetGroups = a.facetCache[pool]; return; }
+  a.facetLoading = true;
+  try {
+    const data = await api.get(`/api/pools/${hit.id}/facets`);
+    a.facetCache[pool] = data.groups || [];
+    if (a.pickerPool === pool) a.facetGroups = a.facetCache[pool];
+  } catch (_) {
+    a.facetGroups = [];          // 切片是增强：拉不到就当没有，不影响选条目
+  } finally {
+    a.facetLoading = false;
+  }
+}
+
+/** 点切片：组内互斥、组间叠加；再点一次取消。只重画切片行与条目列表，不失焦。 */
+export async function asmToggleFacet(slug) {
+  const a = state.assembly;
+  const pool = String(a.pickerPool || '');
+  if (!pool) return;
+  const key = String(slug || '');
+  const cur = asmSelectedFacets();
+  let next;
+  if (!key) {
+    next = [];
+  } else if (cur.includes(key)) {
+    next = cur.filter((s) => s !== key);
+  } else {
+    const group = (a.facetGroups || []).find((g) => (g.options || []).some((o) => o.slug === key));
+    const same = group ? group.options.map((o) => o.slug) : [];
+    next = [...cur.filter((s) => !same.includes(s)), key];
+  }
+  const map = { ...(state.facets || {}) };
+  if (next.length) map[pool] = next; else delete map[pool];
+  state.facets = map;
+  persistFacets(state);
+  const box = $('#asmFacetList');
+  if (box) box.innerHTML = asmFacetsHtml();
+  await asmLoadEntries();
+}
+
 export function asmPickerHtml(key) {
   const a = state.assembly;
   const def = [...SCENE_SLOTS, ...PERSON_SLOTS].find((d) => d.key === key);
@@ -269,6 +335,7 @@ export function asmPickerHtml(key) {
       title="输入池名片段，chip 行只留命中的池">
       <span class="hint" data-qf-count="asmPoolList"></span></div>
     <div class="asm-pools" id="asmPoolList">${poolChipsHtml(state.pools, kind, key, picked, 8, a.pickerPoolQ)}</div>
+    <div class="asm-facets" id="asmFacetList">${asmFacetsHtml()}</div>
     <div class="row" style="margin-top:6px">
       <select class="asm-pool" data-act="asm-pool" title="全部 ${ranked.length} 池">${asmPoolOptionsHtml(ranked, picked)}</select>
       <input type="text" class="asm-q" data-act="asm-q" value="${esc(a.pickerQ)}"
@@ -359,9 +426,15 @@ export async function asmOpenPicker(scope, uid, key) {
   a.entries = []; a.entriesTotal = 0; a.pickerQ = '';
   a.pickerPoolQ = ''; a.pickerLocked = false;
   const def = [...SCENE_SLOTS, ...PERSON_SLOTS].find((d) => d.key === key);
-  const best = rankPools(state.pools, def ? def.kind : '', key)
-    .find((p) => Number(p.item_count || 0) > 0);
+  const ranked = rankPools(state.pools, def ? def.kind : '', key);
+  // 默认落在「能按维度细化」的匹配池上：点衣着该先看到能选连衣裙/泳装的 190 条，
+  // 而不是 740 条一整套的组合预设（那个池没有切片，进去只能整池盲抽）。
+  // chip 行顺序不动，只是落点变聪明——想换池一点就到。
+  const best = ranked.find((p) => Number(p.item_count || 0) > 0 && Number(p.facet_groups || 0) > 0)
+    || ranked.find((p) => Number(p.item_count || 0) > 0);
   a.pickerPool = best ? String(best.name) : '';
+  a.facetGroups = [];
+  await asmLoadFacets();
   await refresh('draw');
   await asmLoadEntries();
 }
@@ -373,6 +446,8 @@ export async function asmPickPool(name) {
   a.pickerPool = String(name || '');
   // 手动点过 chip = 明确要看这一池，搜索也不再跨池；点「全部」则解锁恢复跨池
   a.pickerLocked = !!a.pickerPool;
+  a.facetGroups = [];             // 换池先清空，否则会闪一下上一池的切片
+  await asmLoadFacets();
   await refresh('draw');          // chip 高亮与下拉选中值都要跟着变
   await asmLoadEntries();
 }
@@ -393,6 +468,9 @@ export async function asmLoadEntries() {
     // 的所有池里找 —— `black h` 想命中 `black hair`，而 hair 不在「女性时尚穿搭」池里。
     // 只有用户手动点过 chip / 下拉，才把范围锁在他明确选中的那一池。
     if (a.pickerPool && (!a.pickerQ || a.pickerLocked)) qs.set('pool', a.pickerPool);
+    // 切片只在锁定了单池时生效：跨池搜索时各池切片不同，硬套一个池的会把别的池筛空。
+    const sel = asmSelectedFacets();
+    if (qs.get('pool') && sel.length) qs.set('facets', sel.join(','));
     const data = await api.get('/api/pools/items?' + qs.toString());
     if (a.picking !== token) return;   // 已经在别的格了：丢弃
     a.entries = data.items || [];
@@ -549,6 +627,9 @@ export const actions = {
   },
   'asm-pick-pool': async (btn) => {
     await asmPickPool(btn.dataset.v);
+  },
+  'asm-facet': async (btn) => {
+    await asmToggleFacet(btn.dataset.v);
   },
   'asm-close': async () => {
     state.assembly.picking = null; await refresh('draw');

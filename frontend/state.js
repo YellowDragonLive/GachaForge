@@ -11,6 +11,10 @@ import { makePerson, makeScene } from './widgets.js';
 export const LAST_SESSION_KEY = 'gacha_last_session';
 export const FORM_KEY = 'gacha_draw_form';
 export const ASM_KEY = 'gacha_assembly_v2';   // v2：默认全关，旧 key 的默认随机不能复活
+// 池内切片的选择：按池各记各的，跨会话保留（用户口径是「长期设定」）。
+// 用 localStorage 而不是 sessionStorage —— 关掉浏览器还要在，但必须在 UI 上
+// 一直看得见（chip 高亮 + 条数变少），否则「抽出来的东西莫名变窄」无从排查。
+export const FACET_KEY = 'gacha_facets_v1';
 
 /** 创建初始 state。视图只有一个字段 view（过去 currentView/route 双份，靠纪律保持一致）。 */
 export function createState() {
@@ -27,7 +31,10 @@ export function createState() {
       enabled: true, tab: 'people', people: [makePerson(1)], scene: makeScene(), nextUid: 2,
       picking: null, entries: [], entriesTotal: 0, entriesLoading: false,
       pickerPool: '', pickerQ: '', pickerPoolQ: '', pickerLocked: false,
+      facetGroups: [], facetLoading: false, facetCache: {},
     },
+    // 池内切片选择：{池名: [切片 slug]}。空数组 / 缺键 = 整池，行为与没有切片时一致。
+    facets: {},
     // 意群双语补全的临时 UI 态：不持久化
     vocab: { ready: null, items: [], q: '', scope: '', uid: 0, open: false, loading: false },
     form: { recipe_id: '', pulls: 3, count: 1, seed: '', filter: '',
@@ -71,4 +78,23 @@ export function debounce(fn, ms) {
   };
   wrapped.cancel = () => clearTimeout(timer);
   return wrapped;
+}
+
+/** 切片选择的唯一写出口。空数组直接删键，避免 localStorage 里堆一堆 `[]`。 */
+export function persistFacets(state) {
+  try {
+    const clean = {};
+    Object.entries(state.facets || {}).forEach(([pool, slugs]) => {
+      const list = (slugs || []).filter(Boolean);
+      if (list.length) clean[pool] = list;
+    });
+    localStorage.setItem(FACET_KEY, JSON.stringify(clean));
+  } catch (_) { /* 隐私模式：切片只是丢一次配置，不影响抽卡 */ }
+}
+
+export function restoreFacets(state) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(FACET_KEY) || '{}');
+    state.facets = (saved && typeof saved === 'object') ? saved : {};
+  } catch (_) { state.facets = {}; }
 }
