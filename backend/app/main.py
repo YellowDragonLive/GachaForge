@@ -35,18 +35,18 @@ async def lifespan(app: FastAPI):
     worker = GenerationWorker(s)
     worker.start()
     app.state.worker = worker
-    emit("INFO", "app", "抽卡工作台已启动", host=s.host, port=s.port,
+    emit("INFO", "app", "GachaForge 已启动", host=s.host, port=s.port,
          mock=s.comfy_mock)
     try:
         yield
     finally:
         worker.stop()
-        emit("INFO", "app", "抽卡工作台已停止")
+        emit("INFO", "app", "GachaForge 已停止")
 
 
 def create_app() -> FastAPI:
     s = get_settings()
-    app = FastAPI(title="抽卡工作台", version="1.0.0",
+    app = FastAPI(title="GachaForge", version="1.0.0",
                   description="本地 ComfyUI 抽卡生图工具（FastAPI + SQLite + 原生前端）",
                   lifespan=lifespan)
 

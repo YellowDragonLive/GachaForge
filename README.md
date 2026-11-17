@@ -1,4 +1,4 @@
-# 抽卡工作台
+# 抽卡工作台（GachaForge）
 
 本机单人的抽卡生图工具：**词卡 → prompt → ComfyUI 出图 → 反哺概念图库**。
 双击 `start.bat` 即可，不需要 npm、不需要联网、不需要 API key。

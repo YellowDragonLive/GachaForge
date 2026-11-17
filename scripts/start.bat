@@ -3,11 +3,11 @@ chcp 65001 >nul
 cd /d "%~dp0.."
 REM A named console window is the user's handle on this server: visible in the
 REM taskbar, closable with Ctrl+C or the X button. Never hide this process.
-title Gacha Server - Ctrl+C or close window to stop
+title GachaForge - Ctrl+C or close window to stop
 setlocal EnableDelayedExpansion
 
 echo ============================================================
-echo   Gacha Studio / ComfyUI local gacha tool
+echo   GachaForge / ComfyUI local gacha tool
 echo ============================================================
 
 if not exist ".env" (
