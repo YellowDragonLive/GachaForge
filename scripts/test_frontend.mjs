@@ -748,11 +748,47 @@ const cases = [
     assert.equal((html.match(/data-act="asm-pick-pool"/g) || []).length, 2,
       'chip 数量要受 limit 控制');
   }],
+  ['池内切片：一个池混装多维度时能按维度收窄，一个都不选等于整池', () => {
+    // 用户口径：「随便改池子是伪需求，真正的需求是细化池子」。`人物-头发` 214 条
+    // 混着长短/束法/质地/性别向，整池随机就会「想画长发女孩抽到光头」。
+    const groups = [
+      { name: '长度', options: [{ slug: 'len-long', name: '长发', count: 14 },
+        { slug: 'len-short', name: '短发', count: 14 }] },
+      { name: '适格', options: [{ slug: 'odd-yes', name: '异常向', count: 10 }] },
+    ];
+    const empty = W.facetChipsHtml([], []);
+    assert.equal(empty, '', '没有可切维度时整行必须是空的（CSS :empty 收掉高度）');
+    const html = W.facetChipsHtml(groups, []);
+    assert.match(html, /data-act="asm-facet" data-v="len-long"/, '每个切片都要可点');
+    assert.match(html, /<span class="facet-g">长度<\/span>/, '组名要标出来，否则 12 个 chip 分不清维度');
+    assert.ok(!html.includes('facet-chip clear'), '没选任何切片时不出现「全部」按钮');
+    const on = W.facetChipsHtml(groups, ['len-long']);
+    assert.match(on, /class="facet-chip on"[^>]*data-v="len-long"/, '选中的切片要高亮');
+    assert.match(on, /class="facet-chip clear" data-act="asm-facet" data-v=""/,
+      '选中后行首要给「全部」，否则取消只能靠再点一次同一个 chip，不好发现');
+    assert.ok(on.includes('<i>14</i>'), 'chip 上带条数，用户才知道切完还剩多少');
+  }],
+  ['池内切片接线：组内互斥、组间叠加，选择按池持久化', () => {
+    const asm = readFileSync(new URL('../frontend/features/assembly.js', import.meta.url), 'utf8');
+    assert.match(asm, /asm-pick-pool['"]\s*:[\s\S]{0,80}asm-facet['"]\s*:/,
+      'asm-facet 要有 handler，否则点了没反应');
+    assert.match(asm, /same\.includes\(s\)\)/, '组内互斥：点同组另一档要换掉而不是叠加');
+    assert.match(asm, /restoreFacets|persistFacets/, '切片选择要持久化，否则刷新就丢');
+    const stateSrc = readFileSync(new URL('../frontend/state.js', import.meta.url), 'utf8');
+    assert.match(stateSrc, /localStorage\.setItem\(FACET_KEY/, '「长期设定」要进 localStorage 而不是 sessionStorage');
+    assert.match(stateSrc, /delete state\.facets\[pool\]|clean\[pool\]/,
+      '空选择要删键，不然 localStorage 里堆一堆空数组');
+    const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
+    assert.match(css, /\.asm-facets:empty\s*\{\s*display:\s*none/, '空切片行不能留一条空白占住高度');
+    assert.match(css, /\.facet-chip\s*\{[^}]*border:\s*1px dashed/, '切片要比池 chip 弱一档，否则两级长得一样分不清');
+  }],
   ['池选择接线：选择器渲染 chip 行、默认落在最佳池', () => {    const app = frontendSrc();
     assert.match(app, /poolChipsHtml\(state\.pools/, '选择器要渲染匹配池 chip 行');
     assert.match(app, /asm-pick-pool['"]\s*:/, '点 chip 要有 handler（已搬进装配域注册表）');
-    assert.match(app, /rankPools\(state\.pools[\s\S]{0,120}item_count/,
-      '打开选择器时要默认落在条目最多的匹配池');
+    assert.match(app, /rankPools\(state\.pools[\s\S]{0,400}facet_groups/,
+      '打开选择器时要优先落在「能按维度细化」的池（否则点衣着先落到没有切片的组合预设）');
+    assert.match(app, /ranked\.find\(\(p\) => Number\(p\.item_count \|\| 0\) > 0\);/,
+      '没有可切片的池时退回条目最多的那个，不能落空');
     const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
     assert.match(css, /\.asm-pools\s*\{[^}]*overflow-x:\s*auto/, 'chip 行横向滚动，不折行');
   }],

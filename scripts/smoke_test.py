@@ -286,6 +286,48 @@ def main() -> int:
               scoped["pool"] == "角色" and any("asuna" in x["value"] for x in scoped["items"]),
               f"{scoped['pool']} / {len(scoped['items'])} 项")
 
+        print("-- 池内切片：一个池混装多个维度时按维度收窄 --")
+        # 用户口径：「随便改池子是伪需求，真正的需求是细化池子」。`人物-头发` 214 条
+        # 混着长短 / 束法 / 质地 / 性别向 / 适格，整池随机就会「想画长发女孩抽到光头」。
+        hair = next((p for p in pools if p["name"] == "人物-头发"), None)
+        check("切片：头发池在池列表里", bool(hair), f"{hair['item_count'] if hair else 0} 条")
+        if hair:
+            fd = c.get(f"/api/pools/{hair['id']}/facets").json()["data"]
+            names = [g["name"] for g in fd["groups"]]
+            check("切片端点返回维度分组", fd["has_facets"] and "长度" in names, f"{names}")
+            check("切片带条数（用户要知道切完还剩多少）",
+                  all(o["count"] > 0 for g in fd["groups"] for o in g["options"]))
+            sub = c.get("/api/pools/items", params={
+                "pool": "人物-头发", "facets": "len-long", "limit": 60}).json()["data"]
+            check("按切片收窄条目", 0 < sub["total"] < hair["item_count"],
+                  f"{sub['total']} / {hair['item_count']}")
+            check("收窄后的条目都真属于这一档",
+                  all("long" in (i["tags"] or "").lower() for i in sub["items"]),
+                  f"{[i['label'] for i in sub['items'][:3]]}")
+            ds = c.post("/api/draw-sessions", json={
+                "pulls": 3, "count": 1, "seed": 9,
+                "facets": {"人物-头发": ["len-long"]},
+                "definition": {"slots": [{"pool": "人物-头发", "count": 1}]},
+            }).json()["data"]
+            got = [d["prompt"] for d in ds["draws"]]
+            check("抽卡时切片生效（抽到的都是长发）",
+                  bool(got) and all("long" in p.lower() for p in got), f"{got}")
+            check("切片不影响未选中的池（其他槽位照常随机）",
+                  c.post("/api/draw-sessions", json={
+                      "pulls": 1, "count": 1, "seed": 3,
+                      "definition": {"slots": [{"pool": "发型", "count": 1}]},
+                  }).status_code == 200)
+        # 收编：danbooru 细分类池与粗池 100% 重叠，界面不再单列，但数据一条不删
+        vis = [p["name"] for p in c.get("/api/pools").json()["data"]]
+        allp = [p["name"] for p in c.get("/api/pools",
+                                         params={"include_absorbed": True}).json()["data"]]
+        check("细分类池已收编（界面不再单列）",
+              not any(n.startswith("DanbooruTAG/hair_styles") for n in vis),
+              f"{len(vis)} 池可见")
+        check("收编只隐藏、数据仍在（可回滚）",
+              any(n == "DanbooruTAG/hair_styles_tied" for n in allp)
+              and len(allp) > len(vis), f"{len(allp)} - {len(vis)} = 隐藏 {len(allp)-len(vis)}")
+
         print("-- 画师图鉴：条目名 → 风格样图 --")
         # 文件名是 `<序号>_<原 tag>_result.png`，池里的 tag 带 `artist:` / `rib:` 前缀，
         # 归一化必须两边都能对上，否则一千多条名字里大部分都查不到图。
