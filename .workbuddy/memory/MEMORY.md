@@ -40,4 +40,5 @@
 - 高频操作先写 `scripts/` 脚本 + `docs/运维_*.md` 手册，手册是唯一口径，流程变了改手册和脚本。
 - 冒烟测试必须用 `%TEMP%` 临时库副本隔离，绝不污染正式库；验证数据按 id 精确清理。
 - **部分更新接口是整体覆盖语义，必须带回原字段**：`upsert_recipe` 里 `row.gen_profile_id = data.get("gen_profile_id")`、`upsert_profile` 里 `row.loras_json = _dump(data.get("loras", []))`，只传改动字段会把配方关联的预设 / 用户 LoRA 清空。凡「就地改配方 / 就地调参」都要带 `gen_profile_id`、`loras`、`workflow`（2026-11-16 实测）。
+- **前端新增的请求字段，必须在 pydantic 模型里声明**（2026-11-17 实测，代价是意群从来没进过库）：`schemas.Slot` 缺 `group`/`mode` 时默认 `extra="ignore"`，字段在校验层就蒸发，`body.model_dump()` 之后服务层只能拿到 `None`，而前端、日志、接口返回**全都不报错**。判据：出现「前端传了、服务层读不到」，先看 schema 有没有声明，再怀疑链路。装配类模型统一 `ConfigDict(extra="allow")`，新字段不需要每次改 schema 也不会被吃。
 - **同一台机器有多个 Python，启动脚本不能假设 PATH 里那个装了依赖**（2026-11-15 双击实测踩坑）：双击 bat 走系统 PATH 的 `X:\ProgramData\miniconda3\python.exe` 3.13.13（只有 httpx），终端走 WorkBuddy 自带 `C:\Users\13410\.workbuddy\binaries\python\versions\3.13.12\python.exe` 3.13.14（核心依赖都在这）。`start.bat` 按 `GACHA_PYTHON` → 项目 `.venv` → PATH `python` → WorkBuddy 版本目录的顺序探测「能 import 七个核心模块」的解释器，存 `%PY%` 全程复用并打印。不要给 miniconda 装依赖、不要自动 pip。验证双击场景要用「PATH 只含 miniconda」的临时 bat 干跑，别靠终端环境想当然。
