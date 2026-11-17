@@ -121,13 +121,27 @@ goto :comfy_checked
 REM Build artist semantic index offline on first run; warns only, never blocks startup
 "%PY%" scripts\build_semantics.py --if-missing
 
+REM ---- Already running? -----------------------------------------------------
+REM uvicorn exits immediately when the port is taken and the old bat went
+REM straight to :eof - the window just flashed. Probe first: if the server is
+REM already up, open the browser, explain how to restart, and wait for a key.
+"%PY%" scripts\probe_server.py --open
+REM Use goto labels, not a multi-line if block: cmd mis-parses those on LF bats.
+if errorlevel 1 goto :server_down
+echo [start] Server is already running - browser opened, nothing to start.
+echo [start] To restart with new code, close the old server window first.
+if not "%GACHA_NO_PAUSE%"=="1" pause
+goto :eof
+
+:server_down
 echo [start] Starting server - browser opens automatically...
-"%PY%" scripts\run_server.py
+REM Any launch failure must land in :fail (which pauses), so the error is readable.
+"%PY%" scripts\run_server.py || goto :fail
 goto :eof
 
 :fail
 echo [start] FAILED. See the error above.
-pause
+if not "%GACHA_NO_PAUSE%"=="1" pause
 goto :eof
 
 REM ---- helpers ---------------------------------------------------------------
