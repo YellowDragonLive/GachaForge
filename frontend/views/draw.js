@@ -8,7 +8,7 @@ import { $, done, fail, num, view } from '../core/ui.js';
 import { asmSummaryText, assemblyPanelHtml, saveAssembly } from '../features/assembly.js';
 import { loadPortraits } from '../features/covers.js';
 import { filterHintBoxHtml, filterPaneHtml, updateFilterHint } from '../features/filter.js';
-import { SAMPLERS, SCHEDULERS, modelExtraFields, profileDraft, tuningBody, tuningWorkflowHtml } from '../features/generation.js';
+import { SAMPLERS, SCHEDULERS, ckptPoolKey, modelExtraFields, profileDraft, tuningBody, tuningWorkflowHtml } from '../features/generation.js';
 
 // 抽卡台视图：装配结果 → 一抽 → 任务提交 → 结果卡就地更新。
 // 意群装配面板在 features/assembly.js，这里只负责「抽」与「看结果」。
@@ -97,10 +97,41 @@ export function drawForm() {
 }
 
 // ---------------- 参数预设就地调参 ----------------
+/**
+ * 调参抽屉里换 workflow = 换模型族。
+ *
+ * 三件事必须一起做，否则保存下去必然跑不出图：权重候选换成新族（UNet ↔ checkpoint
+ * 是两个目录）、clip/vae 换成本 workflow 的默认（Anima 的文本编码器维度与 Flux2 不兼容）、
+ * 重绘抽屉让「模型专有字段」跟着出现或消失。重绘前先把已填的表单读回草稿，不丢输入。
+ */
+export async function switchTuneWorkflow(name) {
+  const t = state.tuneDraft || {};
+  const prev = t.workflow;
+  const keep = tuningBody(state);
+  Object.assign(t, keep);
+  const memo = t.wfMemo || (t.wfMemo = {});
+  const changed = prev && prev !== name;
+  if (changed) {
+    memo[prev] = { checkpoint: keep.checkpoint, clip: keep.clip, vae: keep.vae,
+                   steps: keep.steps, cfg: keep.cfg };
+  }
+  const saved = memo[name] || {};
+  const def = (state.config?.workflow_specs || []).find((w) => w.name === name)?.defaults || {};
+  t.workflow = name;
+  t.checkpoint = saved.checkpoint ?? def.CKPT ?? '';
+  t.clip = saved.clip ?? def.CLIP ?? '';
+  t.vae = saved.vae ?? def.VAE ?? '';
+  t.steps = saved.steps ?? (Number(def.STEPS) || t.steps);
+  t.cfg = saved.cfg ?? (Number.isFinite(Number(def.CFG)) ? Number(def.CFG) : t.cfg);
+  // LoRA 绑在具体底模上，换族后继续挂着只会污染画面
+  if (changed) t.loras = [];
+  await renderDraw();
+}
+
 /** 展开前先把当前选中的预设读进草稿，避免打开就看到空表单。 */
 export async function openTuning() {
   if (state.tuning) { state.tuning = false; await renderDraw(); return; }
-  if (!Array.isArray(state.models.checkpoints) || !state.models.checkpoints.length) {
+  if (!Array.isArray(state.models?.checkpoints) || !Array.isArray(state.models?.unet)) {
     try { state.models = await api.get('/api/comfy/models'); } catch (_) { /* 离线时退回手填值 */ }
   }
   state.tuneDraft = profileDraft(state);
@@ -110,7 +141,9 @@ export async function openTuning() {
 
 export function tuningHtml() {
   const t = state.tuneDraft || {};
-  const cks = state.models.checkpoints || [];
+  // 权重池随 workflow 变：Anima / MOSS 是纯 UNet（models/unet），SDXL 是完整
+  // checkpoint（models/checkpoints），两个目录互不相通，列错就搜不到自己的模型。
+  const cks = state.models[ckptPoolKey(state, t.workflow)] || [];
   const ckOpts = (cks.length ? cks : (t.checkpoint ? [t.checkpoint] : []))
     .map((m) => `<option value="${esc(m)}" ${m === t.checkpoint ? 'selected' : ''}>${esc(m)}</option>`)
     .join('');

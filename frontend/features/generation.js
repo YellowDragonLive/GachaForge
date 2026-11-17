@@ -41,6 +41,19 @@ export function hasModelExtras(state, workflow) {
   return caps.includes('clip') || String(workflow).toLowerCase().includes('anima');
 }
 
+/**
+ * 该 workflow 的权重要从哪个模型池里选。
+ *
+ * 纯 UNet（Anima / MOSS）走 UNETLoader，只看得到 models/unet；
+ * SDXL 走 CheckpointLoaderSimple，只看得到 models/checkpoints。
+ * 这两个目录在 ComfyUI 里互不相通，列错了就会出现「模型装着但下拉里搜不到」——
+ * 用户装完 MOSS 在前端找不到，就是这个原因。
+ */
+export function ckptPoolKey(state, workflow) {
+  const spec = (state?.config?.workflow_specs || []).find((w) => w.name === workflow);
+  return spec?.ckpt_kind === 'unet' ? 'unet' : 'checkpoints';
+}
+
 /** 按 spec 能力显示模型专有字段（Anima 的 clip / vae）。无 spec 时按文件名推断。 */
 export function modelExtraFields(state, workflow, values = {}) {
   if (!hasModelExtras(state, workflow)) return '';
@@ -58,7 +71,8 @@ export function modelExtraFields(state, workflow, values = {}) {
 export function tuningWorkflowHtml(state, current) {
   return `<div class="field" style="margin-top:8px"><span>生图 workflow · 决定用哪个模型</span>
     <select id="tWorkflow">${workflowOptions(state, current)}</select>
-    <div class="hint">SDXL / Anima 共用本机 ComfyUI，切换后 checkpoint 与 LoRA 需匹配该模型。</div>
+    <div class="hint">换 workflow 会换掉 checkpoint / CLIP / VAE / 步数 / CFG 并清空 LoRA
+      （不同模型族的权重互不通用）。</div>
   </div>`;
 }
 

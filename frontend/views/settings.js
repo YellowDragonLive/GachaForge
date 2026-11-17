@@ -14,7 +14,7 @@ import { persistForm } from '../state.js';
 import { state } from '../store.js';
 import { loraOptionList, normalizeLoras } from '../widgets.js';
 import {
-  DEFAULT_WORKFLOW, SAMPLERS, SCHEDULERS, hasModelExtras, optionsWithCurrent,
+  DEFAULT_WORKFLOW, SAMPLERS, SCHEDULERS, ckptPoolKey, hasModelExtras, optionsWithCurrent,
   profileToDraft, settingsBody, workflowChoices,
 } from '../features/generation.js';
 import { refresh, updateStatus } from '../core/router.js';
@@ -34,6 +34,10 @@ const loraWeight = ref(0.8);
 const token = ref('');
 const profiles = ref([]);
 const loraFiles = ref([]);
+
+/** workflow 名 → 在该 workflow 下填过的权重三项。切走再切回来能拿回原选择，
+    否则「SDXL → MOSS → SDXL」会把刚填的 checkpoint 洗掉一次。 */
+const wfMemo = {};
 
 /** 把一条预设摊进草稿。切换预设走这里，不重新挂载组件（也就不丢未保存的输入焦点）。 */
 function fillDraft(p, pid) {
@@ -58,9 +62,13 @@ const SettingsView = defineComponent({
     const anima = computed(() => hasModelExtras(state, draft.workflow));
     const samplerOptions = computed(() => optionsWithCurrent(SAMPLERS, draft.sampler));
     const schedulerOptions = computed(() => optionsWithCurrent(SCHEDULERS, draft.scheduler));
-    // checkpoint 枚举来自 ComfyUI /object_info；当前值不在枚举里时补进去，换机器后不被清空
+    // checkpoint 枚举来自 ComfyUI /object_info；当前值不在枚举里时补进去，换机器后不被清空。
+    // 纯 UNet 的 workflow（Anima / MOSS）走 UNETLoader，只能看到 models/unet 里的文件；
+    // SDXL 走 CheckpointLoaderSimple，看的是 models/checkpoints。两套目录互不相通，
+    // 列错了就会出现「模型明明装着、下拉里却搜不到」。
+    const ckptKind = computed(() => ckptPoolKey(state, draft.workflow));
     const checkpointOptions = computed(() =>
-      optionsWithCurrent(state.models?.checkpoints || [], draft.checkpoint));
+      optionsWithCurrent(state.models?.[ckptKind.value] || [], draft.checkpoint));
     const loraOptions = computed(() => loraOptionList(loraFiles.value, loras));
     const comfyText = computed(() => {
       if (!comfyState.online) return '离线';
@@ -69,9 +77,36 @@ const SettingsView = defineComponent({
 
     return {
       draft, loras, loraPick, loraWeight, token, profiles, loraFiles,
-      sys, comfyState, comfyText, wfChoices, wfHint, anima,
+      sys, comfyState, comfyText, wfChoices, wfHint, anima, ckptKind,
       samplerOptions, schedulerOptions, checkpointOptions, loraOptions, cut,
       pickValue: computed(() => (draft.id == null ? '' : String(draft.id))),
+      /**
+       * 换 workflow = 换模型族，三项权重全部作废：Anima 的纯 UNet 喂给 MOSS 的
+       * UNETLoader 不会报错但出不了正常图，Anima 的文本编码器维度也和 Flux2 不兼容。
+       * 所以整组换成本 workflow 的默认值，并顺手把上一个 workflow 的选择记下来。
+       */
+      switchWorkflow(name) {
+        const prev = draft.workflow;
+        const changed = prev && prev !== name;
+        if (changed) {
+          wfMemo[prev] = {
+            checkpoint: draft.checkpoint, clip: draft.clip, vae: draft.vae,
+            steps: draft.steps, cfg: draft.cfg,
+          };
+        }
+        draft.workflow = name;
+        const memo = wfMemo[name] || {};
+        const def = (state.config?.workflow_specs || [])
+          .find((w) => w.name === name)?.defaults || {};
+        draft.checkpoint = memo.checkpoint ?? def.CKPT ?? '';
+        draft.clip = memo.clip ?? def.CLIP ?? '';
+        draft.vae = memo.vae ?? def.VAE ?? '';
+        draft.steps = memo.steps ?? (Number(def.STEPS) || draft.steps);
+        draft.cfg = memo.cfg ?? (Number.isFinite(Number(def.CFG)) ? Number(def.CFG) : draft.cfg);
+        // LoRA 是按具体底模训的，换族后继续挂着只会污染画面（Anima 的 turbo LoRA
+        // 挂到 MOSS 上必糊）。同族内换 checkpoint 也一并清，让用户重新挑。
+        if (changed) loras.splice(0, loras.length);
+      },
       switchProfile(v) {
         const id = Number(v) || null;
         state.settingsPid = id;
@@ -137,10 +172,13 @@ const SettingsView = defineComponent({
           data-suggest="profile" autocomplete="off"></div>
 
         <div class="field" style="margin-top:8px"><span>Workflow · 不同模型走不同节点图</span>
-          <select id="pWorkflow" v-model="draft.workflow" style="min-width:220px">
+          <select id="pWorkflow" :value="draft.workflow" @change="switchWorkflow($event.target.value)"
+            style="min-width:220px">
             <option v-for="w in wfChoices" :key="w.name" :value="w.name">{{ w.label }}</option>
           </select>
-          <div class="hint">{{ wfHint }}</div></div>
+          <div class="hint">{{ wfHint }}</div>
+          <div class="hint">换 workflow 会一并换掉 checkpoint / CLIP / VAE / 步数 / CFG，并清空 LoRA
+            （不同模型族的权重互不通用，留着只会出错）。</div></div>
 
         <div class="row" style="margin-top:8px" v-if="anima">
           <div class="field"><span>CLIP 模型（Anima/Qwen）</span>
@@ -151,10 +189,11 @@ const SettingsView = defineComponent({
               data-suggest="vae" autocomplete="off" spellcheck="false"></div>
         </div>
 
-        <div class="field" style="margin-top:8px"><span>Checkpoint · 点选，来自 ComfyUI /object_info</span>
+        <div class="field" style="margin-top:8px"><span>Checkpoint ·
+          {{ ckptKind === 'unet' ? '纯 UNet 权重，来自 models/unet' : '完整 checkpoint，来自 models/checkpoints' }}</span>
           <div class="row">
             <input type="text" class="qf" data-qf="pCheckpoint" autocomplete="off" spellcheck="false"
-              style="max-width:200px" placeholder="筛选 checkpoint：如 sdxl / wai">
+              style="max-width:200px" :placeholder="ckptKind === 'unet' ? '筛选：如 moss / anima' : '筛选：如 sdxl / wai'">
             <select id="pCheckpoint" v-model="draft.checkpoint" style="flex:1;min-width:210px">
               <option value="">（留空 = ComfyUI 默认）</option>
               <option v-for="m in checkpointOptions" :key="m" :value="m">{{ m }}</option>

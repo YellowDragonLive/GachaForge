@@ -161,15 +161,45 @@ class WorkflowRegistry:
             legacy=True,
         )
 
+    def ckpt_kind(self, name: str) -> str:
+        """`$CKPT` 落在哪个加载器上：`unet` 还是 `checkpoint`。
+
+        Anima 与 MOSS 都是纯 UNet（权重里只有 `model.diffusion_model.*`），
+        CheckpointLoaderSimple 认不出来会直接报 `Could not detect model type`；
+        而 SDXL 反过来需要完整 checkpoint。ComfyUI 里这是两个目录、两套枚举
+        （`models/unet` 与 `models/checkpoints`），前端必须按 workflow 换候选列表，
+        否则用户在「checkpoint」下拉里永远找不到 MOSS。
+        """
+        try:
+            tpl = json.loads((self.dir / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return "checkpoint"
+        for node in tpl.values():
+            if not isinstance(node, dict):
+                continue
+            if "$CKPT" in (node.get("inputs") or {}).values():
+                return "unet" if node.get("class_type") == "UNETLoader" else "checkpoint"
+        return "checkpoint"
+
     def describe(self) -> list[dict[str, Any]]:
-        """给 /api/config 用：列表 + 是否有 spec + 能力声明。"""
+        """给 /api/config 用：列表 + 是否有 spec + 能力声明 + 权重加载器类型。
+
+        `defaults` 只透出「换模型族就要跟着换」的项：CLIP/VAE 是编码器（维度不兼容
+        直接出不来图），STEPS/CFG 是蒸馏程度（turbo 模型用 CFG 5 会烧成色块）。
+        """
         out = []
         for name in self.templates():
             try:
                 spec = self.load(name)
+                defaults = {k: v.get("default") for k, v in spec.params.items()
+                            if isinstance(v, dict) and v.get("default") is not None}
                 out.append({"name": name, "id": spec.id, "label": spec.label,
-                            "spec": not spec.legacy, "capabilities": list(spec.capabilities)})
+                            "spec": not spec.legacy, "capabilities": list(spec.capabilities),
+                            "ckpt_kind": self.ckpt_kind(name),
+                            "defaults": {k: defaults.get(k)
+                                         for k in ("CKPT", "CLIP", "VAE", "STEPS", "CFG")}})
             except (ValueError, OSError):
                 out.append({"name": name, "id": Path(name).stem,
-                            "label": Path(name).stem, "spec": False, "capabilities": []})
+                            "label": Path(name).stem, "spec": False, "capabilities": [],
+                            "ckpt_kind": "checkpoint", "defaults": {}})
         return out

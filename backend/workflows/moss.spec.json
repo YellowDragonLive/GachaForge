@@ -4,7 +4,7 @@
   "capabilities": ["lora", "negative", "clip", "vae"],
   "result_nodes": ["9"],
   "params": {
-    "CKPT": {"source": "profile", "key": "checkpoint"},
+    "CKPT": {"source": "profile", "key": "checkpoint", "default": "moss_image_sft_turbo_int8_convrot.safetensors"},
     "CLIP": {"source": "profile", "key": "clip", "default": "qwen3.5_9b_w4a8_gptq.safetensors"},
     "VAE": {"source": "profile", "key": "vae", "default": "flux2-vae_small.safetensors"},
     "PROMPT": {"source": "prompt"},

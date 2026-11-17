@@ -69,6 +69,12 @@ class ComfyClient:
     def checkpoints(self) -> list[str]:
         return self._enum("CheckpointLoaderSimple", "ckpt_name")
 
+    # 纯 UNet 权重（Anima / MOSS / Flux）在 ComfyUI 里属于另一套枚举：UNETLoader
+    # 只扫 models/unet 与 models/diffusion_models。两者不是同一批文件，前端必须
+    # 按 workflow 分开列，否则「checkpoint」下拉里永远看不到 MOSS。
+    def unets(self) -> list[str]:
+        return self._enum("UNETLoader", "unet_name")
+
     def loras(self) -> list[str]:
         return self._enum("LoraLoader", "lora_name")
 
@@ -88,12 +94,13 @@ class ComfyClient:
 
     def models(self) -> dict:
         if self.s.comfy_mock:
-            return {"checkpoints": ["waiIllustriousSDXL_v170.safetensors"],
+            return {"checkpoints": ["waiIllustriousSDXL_v170.safetensors"], "unet": [],
                     "loras": [], "samplers": ["euler_ancestral", "euler", "dpmpp_2m"],
                     "schedulers": ["normal", "karras"], "vae": [], "clip": [], "mock": True}
-        return {"checkpoints": self.checkpoints(), "loras": self.loras(),
-                "samplers": self.samplers(), "schedulers": self.schedulers(),
-                "vae": self.vaes(), "clip": self.clips(), "mock": False}
+        return {"checkpoints": self.checkpoints(), "unet": self.unets(),
+                "loras": self.loras(), "samplers": self.samplers(),
+                "schedulers": self.schedulers(), "vae": self.vaes(),
+                "clip": self.clips(), "mock": False}
 
     # ---------- workflow ----------
     def build_workflow(self, *, profile: dict, prompt: str, negative: str,

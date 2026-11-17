@@ -4,7 +4,7 @@
   "capabilities": ["lora", "negative", "clip", "vae"],
   "result_nodes": ["46"],
   "params": {
-    "CKPT": {"source": "profile", "key": "checkpoint"},
+    "CKPT": {"source": "profile", "key": "checkpoint", "default": "waiANIMA_v10Base10_learned_int8mixed_rowwise.safetensors"},
     "CLIP": {"source": "profile", "key": "clip", "default": "qwen_3_06b_base.safetensors"},
     "VAE": {"source": "profile", "key": "vae", "default": "qwen_image_vae.safetensors"},
     "PROMPT": {"source": "prompt"},

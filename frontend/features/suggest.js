@@ -133,7 +133,16 @@ const PROVIDERS = {
   concept: (q) => local(state.concepts && state.concepts.items, q, (c) => ({
     value: c.label || c.key, hint: c.kind,
   })),
-  checkpoint: async (q) => local(await modelList('checkpoints'), q, (v) => ({ value: v, group: 'checkpoint' })),
+  // 纯 UNet（Anima / MOSS）与完整 checkpoint 在 ComfyUI 里是两个目录、两套枚举，
+  // 合并列出来并标注来源，否则输入 `moss` 永远补不出东西——它在 models/unet 下。
+  checkpoint: async (q) => {
+    const [ckpt, unet] = await Promise.all([modelList('checkpoints'), modelList('unet')]);
+    const items = [
+      ...ckpt.map((v) => ({ value: v, group: 'checkpoint' })),
+      ...unet.filter((v) => !ckpt.includes(v)).map((v) => ({ value: v, group: 'UNet' })),
+    ];
+    return local(items, q, (x) => x);
+  },
   lora: async (q) => local(await modelList('loras'), q, (v) => ({ value: v, group: 'LoRA' })),
   clip: async (q) => local(await modelList('clip'), q, (v) => ({ value: v, group: '文本编码器' })),
   vae: async (q) => local(await modelList('vae'), q, (v) => ({ value: v, group: 'VAE' })),

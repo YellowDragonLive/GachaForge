@@ -14,7 +14,7 @@ import { renderJobs, refreshJobsBody, setStreamState } from './views/jobs.js';
 import { renderGallery, refreshGallery } from './views/gallery.js';
 import { renderSettings } from './views/settings.js';
 import { renderDraw, updateDrawCard, refreshDrawStates, paintStars,
-  readDrawForm, restoreForm, restoreLastDraw } from './views/draw.js';
+  readDrawForm, restoreForm, restoreLastDraw, switchTuneWorkflow } from './views/draw.js';
 import { syncConceptPanel, loadConcepts, loadSemantics, loadSemanticsStatus,
   conceptQueryInput, renderConceptPage } from './views/concepts.js';
 import { onCoverOver, onCoverOut, onThumbOver, onThumbOut, hideThumbPop, resetPortraits } from './features/covers.js';
@@ -152,6 +152,7 @@ function onChange(e) {
   if (t.dataset && t.dataset.suggest) suggestBlur();
   if (t.dataset && t.dataset.act === 'asm-extra') { vocabBlur(); return; }
   if (t.dataset && t.dataset.act === 'asm-pool') { asmPoolChange(t); return; }
+  if (t.id === 'tWorkflow') { switchTuneWorkflow(t.value); return; }
   if (t.id === 'dFilterPool') {
     state.filterPool = t.value;
     readDrawForm();
