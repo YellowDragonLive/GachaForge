@@ -57,7 +57,9 @@ export function asmGroupInputHtml(scope, uid, label) {
   if (!g) return '';
   const active = state.vocab.scope === scope
     && Number(state.vocab.uid || 0) === Number(uid || 0);
-  const q = active ? String(state.vocab.q || '') : '';
+  // 输入框显示草稿（g.draft），不是全局 q：草稿按意群各存各的，
+  // 切到别的人物卡再切回来，已经打的字还在。q 只用于查候选。
+  const shown = String(g.draft != null ? g.draft : (active ? state.vocab.q : '') || '');
   const words = String(g.extra || '').split(',').map((x) => x.trim()).filter(Boolean);
   const su = `data-scope="${scope}" data-uid="${uid || 0}"`;
   const chips = words.map((w, i) => `<span class="vocab-chip" title="已选词，点 × 删除">${esc(cut(w, 30))}
@@ -65,9 +67,9 @@ export function asmGroupInputHtml(scope, uid, label) {
   return `<div class="asm-extra${words.length ? ' on' : ''}" ${su}>
     <span class="asm-extra-k">${esc(label)} · 自由词</span>
     <input type="text" class="asm-extra-q" data-act="asm-extra" ${su}
-      value="${esc(q)}" placeholder="输入 黑发 / silver hair 查词表，点候选加入"
+      value="${esc(shown)}" placeholder="输入 黑发 / silver hair 查词表，点候选加入"
       autocomplete="off" spellcheck="false"
-      title="中英文都能查；候选显示双语，点一下把英文写进这个词群">
+      title="中英文都能查；候选显示双语，点一下把英文写进这个词群；回车按原样加入">
   </div>
   ${words.length ? `<div class="vocab-chosen" ${su}>${chips}</div>` : ''}
   <div class="vocab-suggest" ${su} ${active && state.vocab.open ? '' : 'hidden'}>${active ? vocabSuggestHtml() : ''}</div>`;

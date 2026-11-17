@@ -7,6 +7,7 @@ import { refresh } from '../core/router.js';
 import { $, done, fail, num, view } from '../core/ui.js';
 import { asmSummaryText, assemblyPanelHtml, saveAssembly } from '../features/assembly.js';
 import { loadPortraits } from '../features/covers.js';
+import { commitAssemblyDrafts } from '../features/vocab.js';
 import { filterHintBoxHtml, filterPaneHtml, updateFilterHint } from '../features/filter.js';
 import { SAMPLERS, SCHEDULERS, ckptPoolKey, modelExtraFields, profileDraft, tuningBody, tuningWorkflowHtml } from '../features/generation.js';
 
@@ -391,6 +392,9 @@ export async function restoreLastDraw() {
 
 export async function doDraw({ generate = false } = {}) {
   readDrawForm();
+  // 自由词输入框里「打了字但没回车」的内容：用户以为已经填进去了，抽卡前统一收编，
+  // 否则字留在框里、prompt 里没有——静默丢失最难排查。中文段不写进 prompt，明说。
+  const drafted = commitAssemblyDrafts();
   const f = state.form;
   // 装配优先：只要面板上有任何一格不是「关闭」，就用装配编译出的定义，
   // 此时忽略配方与过滤——两者同时生效会互相筛，静默变空最难排查。
@@ -416,15 +420,19 @@ export async function doDraw({ generate = false } = {}) {
   state.drawJobs = {}; state.drawImages = {};
   sessionStorage.setItem(LAST_SESSION_KEY, String(data.session_id));
   await renderDraw();
+  // 草稿收编的结果必须说出来：加了什么、跳过了什么，用户才能判断图为什么这样。
+  const note = drafted.rejected.length
+    ? `；中文「${drafted.rejected.slice(0, 2).join('、')}」未加入（prompt 只收英文 tag）`
+    : (drafted.added ? `；自由词已补入 ${drafted.added} 段` : '');
   if (generate && state.draws.length) {
     try {
       await submitJobs(state.draws.map((d) => d.id), { silent: true });
-      done(`抽到 ${data.draws.length} 抽，已提交生图`);
+      done(`抽到 ${data.draws.length} 抽，已提交生图${note}`);
     } catch (err) {
       fail(err);   // 生图提交失败不影响抽卡结果，卡片仍在「待生成」可单独重试
     }
   } else {
-    done(`抽卡完成：${data.draws.length} 抽 / ${data.pool_count} 个池`);
+    done(`抽卡完成：${data.draws.length} 抽 / ${data.pool_count} 个池${note}`);
   }
 }
 

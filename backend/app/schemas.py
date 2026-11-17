@@ -57,6 +57,13 @@ class PoolItemOut(_Out):
 
 
 class Slot(BaseModel):
+    # extra="allow" 是硬要求，不是随手加的：默认 extra="ignore" 会在校验层
+    # **静默丢掉**未声明字段，`body.model_dump()` 里就再也没有它们了。
+    # 意群归属（group）和三态（mode）就是这样丢的——前端一直在传，
+    # 库里 slot_extras.group_key 却全空，导致「场景 / P1 / P2」根本没进快照。
+    # 保持 allow 而不是 forbid：旧前端少传字段不能把整个抽卡请求打 422。
+    model_config = ConfigDict(extra="allow")
+
     pool: str = ""
     count: int = Field(default=1, ge=1, le=20)
     weight: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -66,9 +73,17 @@ class Slot(BaseModel):
     # 手填的任意值（不局限于池子）：填了就按原文写进 prompt，不查池子、不吃 filter。
     # 与 pick 互斥，run_recipe 优先认 free —— 池里改过名、外来的词、自造 tag 都靠它。
     free: str = ""
+    # 意群归属：场景 / P1 / P2…（同一意群的 tag 在 prompt 里必须挨在一起，
+    # 否则 A 的衣着会串到 B 身上）。落 slot_extras.group_key。
+    group: str = ""
+    # 槽位三态：off / random / locked。落 slot_extras.mode，重跑与明细都靠它。
+    mode: str = ""
 
 
 class RecipeDefinition(BaseModel):
+    # 同 Slot：装配编译出的新字段必须原样到 service，不能在校验层蒸发。
+    model_config = ConfigDict(extra="allow")
+
     fixed_head: str = ""
     fixed_tail: str = ""
     template: str = ""

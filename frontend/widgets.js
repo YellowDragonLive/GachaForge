@@ -461,7 +461,9 @@ export function makePerson(uid, gender = 'female') {
   }
   // extra = 这个人物「意群」的自由输入：池里没有的 tag 从这里补。
   // 一个人物卡 = 一个意群，extra 只描述这个人，不会漏到别人身上。
-  return { uid, gender, slots, extra: '' };
+  // draft = 输入框里还没回车确认的草稿，按意群各存各的：切到别的格子再切回来
+  // 不能把已经打的字弄丢（原来它只活在全局 state.vocab.q 里，切走即失）。
+  return { uid, gender, slots, extra: '', draft: '' };
 }
 
 /** 场景默认值。extra 是场景意群自己的自由输入。 */
@@ -471,6 +473,7 @@ export function makeScene() {
     scene[d.key] = { kind: d.kind, mode: d.fallback, pick: '', tags: '' };
   }
   scene.extra = '';
+  scene.draft = '';
   return scene;
 }
 

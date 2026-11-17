@@ -269,6 +269,34 @@ def main() -> int:
               any(it.get("free") and it.get("locked") for p in pv_free for it in p.get("detail", []))
               and all("smile" in x for x in prompts_free))
 
+        # 意群归属（group）：前端一直在传 group/mode，但 Slot 里没声明这两个字段时
+        # pydantic 默认 extra="ignore" 会静默丢掉，结果是明细里没有意群、同一意群
+        # 的 tag 也可能被打散（A 的衣着串到 B 身上）。这条闸守的是「传了就不许丢」。
+        pv_group = c.post("/api/recipes/preview", params={"pulls": 1, "seed": 3}, json={
+            "fixed_head": "masterpiece", "count_tags": "1girl, 1boy",
+            "slots": [{"pool": "任意值·P1", "free": "red dress", "group": "P1",
+                       "mode": "locked"},
+                      {"pool": "任意值·P2", "free": "blue suit", "group": "P2",
+                       "mode": "locked"}],
+        }).json()["data"]
+        grp = [(it.get("group"), it.get("mode"), (it.get("tags") or [""])[0])
+               for p in pv_group for it in p.get("detail", []) if it.get("group")]
+        check("意群归属与原样透传（Slot 不吞 group/mode）",
+              grp == [("P1", "locked", "red dress"), ("P2", "locked", "blue suit")], str(grp))
+        check("同一意群的词在 prompt 里相邻",
+              bool(pv_group) and pv_group[0]["prompt"].index("red dress")
+              < pv_group[0]["prompt"].index("blue suit"),
+              pv_group[0]["prompt"][:80] if pv_group else "无")
+
+        # 人数 tag 有两种存法：整项（`1girl`）和整串（`1boy, alban knox, nijisanji`）。
+        # 池子是整句导入的，实测全库 8325 条走后者、只有 47 条是前者——原来只认
+        # 整项那种，等于「剥人数」规则基本没生效：面板写 1girl、prompt 里并着 1boy。
+        from backend.app.core.recipes import strip_count_tags
+        kept_c, removed_c = strip_count_tags(["1boy, alban knox, nijisanji", "long hair"])
+        check("整串里的人数 tag 也会被剥掉（保留条目其余部分）",
+              kept_c == ["alban knox, nijisanji", "long hair"] and removed_c == ["1boy"],
+              f"{kept_c} / 剥掉 {removed_c}")
+
         # 点选控件的数据源：路由必须排在 /{pool_id} 之前，否则会被 int 校验吞掉变 422
         hot = c.get("/api/pools/tag-suggest?limit=20")
         hot_data = hot.json()["data"] if hot.status_code == 200 else {}

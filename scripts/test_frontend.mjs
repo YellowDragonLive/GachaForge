@@ -575,6 +575,13 @@ const cases = [
     assert.match(app, /vocabAddWord\(/, '点候选写英文到意群 extra');
     assert.match(app, /\/api\/vocab\/suggest/, '接了词表补全接口');
     assert.match(app, /\[\\u4e00-\\u9fff\]/, '没有候选时拦住中文，不写进 prompt');
+    // 草稿不能静默丢：用户把字打进框里、没回车就去抽卡，是最容易漏的一条路。
+    // 现在打字即按意群存 draft（切走切回不丢），抽卡前统一提交成正式词。
+    assert.match(app, /g\.draft = t\.value/, '打字同时写进意群自己的草稿');
+    assert.match(app, /String\(g\.draft/, '输入框回显草稿，不靠全局 q');
+    assert.match(app, /export function commitAssemblyDrafts\(/, '有草稿收编函数');
+    assert.match(app, /commitAssemblyDrafts\(\);/, '抽卡前调用收编');
+    assert.match(app, /drafted\.rejected/, '中文段被跳过时要明说，不能静默丢');
     const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
     assert.match(css, /\.vocab-suggest \{/, '候选下拉样式');
     assert.match(css, /\.vocab-chip \{/, '已选词 chip 样式');

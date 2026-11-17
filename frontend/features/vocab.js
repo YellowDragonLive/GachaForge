@@ -72,9 +72,39 @@ export function vocabAddWord(scope, uid, en) {
   const words = String(g.extra || '').split(',').map((x) => x.trim()).filter(Boolean);
   if (!words.some((w) => w.toLowerCase() === word.toLowerCase())) words.push(word);
   g.extra = words.join(', ');
+  g.draft = '';                 // 草稿已转正，输入框跟着清空
   state.vocab.q = ''; state.vocab.open = false; state.vocab.items = [];
   refresh('draw').catch(fail);
   return true;
+}
+
+/**
+ * 抽卡前把「输入框里还没回车的草稿」提交成正式词。
+ *
+ * 病根是输入框看起来像自由文本框、实际只当查询工具用：用户把
+ * 「A realistic photograph of coser」打进去就去点抽卡，字留在框里、
+ * `g.extra` 是空的，图里自然没有——这是静默丢失，最坏的一种。
+ * 所以抽卡时统一收编：英文段原样写进该意群；中文段与「prompt 只收英文 tag」
+ * 的约定冲突，不偷偷丢，收集起来由调用方提示一次。
+ */
+export function commitAssemblyDrafts() {
+  const list = [['场景', state.assembly.scene],
+    ...state.assembly.people.map((p, i) => [`P${i + 1}`, p])];
+  const rejected = [];
+  let added = 0;
+  for (const [label, g] of list) {
+    const draft = String((g && g.draft) || '').trim();
+    if (!draft) continue;
+    const words = String(g.extra || '').split(',').map((x) => x.trim()).filter(Boolean);
+    for (const seg of draft.split(',').map((x) => x.trim()).filter(Boolean)) {
+      if (/[\u4e00-\u9fff]/.test(seg)) { rejected.push(`${label}「${seg}」`); continue; }
+      if (!words.some((w) => w.toLowerCase() === seg.toLowerCase())) words.push(seg);
+      added += 1;
+    }
+    g.extra = words.join(', ');
+    g.draft = '';
+  }
+  return { added, rejected };
 }
 
 /** 打字查词表（input 委派）：记录激活意群并防抖，只刷候选容器不重建输入框。 */
@@ -82,6 +112,9 @@ export function vocabInput(t) {
   state.vocab.scope = t.dataset.scope || '';
   state.vocab.uid = Number(t.dataset.uid) || 0;
   state.vocab.q = t.value;
+  // 同时记到意群自己的 draft：切走再切回来、或者刷新面板，都不能把已打的字弄丢。
+  const g = vocabTarget(state.vocab.scope, state.vocab.uid);
+  if (g) g.draft = t.value;
   clearTimeout(vocabTimer);
   vocabTimer = setTimeout(() => loadVocabSuggest(), 220);
 }

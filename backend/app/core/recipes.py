@@ -20,15 +20,38 @@ COUNT_TAG_RE = re.compile(
 
 
 def strip_count_tags(tags: list[str]) -> tuple[list[str], list[str]]:
-    """剥掉人数类 tag，返回 (剩下的, 被剥掉的)，便于在明细里留痕。"""
+    """剥掉人数类 tag，返回 (剩下的, 被剥掉的)，便于在明细里留痕。
+
+    条目有两种存法，必须都认：
+      ① 整项就是人数 tag：`1girl`
+      ② 整串当一个 tag 存：`1boy, alban knox, nijisanji` —— 池子是整句导入的，
+         实测全库 8325 条走这条，只有 47 条是 ①。原来只认 ①，等于这条规则
+         基本没生效：面板写着 `1girl`，prompt 里却并着 `1boy`，出图直接变男性。
+    剥完按原顺序 join 回去，不改变条目在 prompt 里的位置。
+    """
     kept: list[str] = []
     removed: list[str] = []
     for t in tags:
         key = str(t).strip()
-        if key and COUNT_TAG_RE.match(key):
+        if not key:
+            continue
+        if COUNT_TAG_RE.match(key):
             removed.append(key)
-        elif key:
-            kept.append(key)
+            continue
+        if "," in key:
+            left: list[str] = []
+            for part in key.split(","):
+                p = part.strip()
+                if not p:
+                    continue
+                if COUNT_TAG_RE.match(p):
+                    removed.append(p)
+                else:
+                    left.append(p)
+            if left:
+                kept.append(", ".join(left))
+            continue
+        kept.append(key)
     return kept, removed
 
 
