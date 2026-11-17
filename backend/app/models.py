@@ -374,3 +374,59 @@ class SlotExtra(Base):
     free: Mapped[str] = mapped_column(Text, default="")
     pick: Mapped[str] = mapped_column(String(300), default="")
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+# ---------------- 池内切片 facet（2026-11-17 新增）----------------
+# 病根不是「池子太少」，而是「一个池装了好几个维度」：`人物-头发` 212 条同时混着
+# 长度 / 束法 / 质地 / 刘海 / 发色 / 性别向 / 异常。想「只要长发」「不要光秃」只能
+# 整池换掉，于是要么抽到光头，要么把池关掉连发型都没有。
+#
+# 解法不是把 212 条拆成 6 个池（爆池数、不可逆、下个切面还得再拆），而是给池加
+# 「切片轴」：池和条目一个字不改，只在其上挂一组正交维度，抽卡时按选中的档位收窄。
+# 不选任何档位 = 现在的行为，零回归。
+#
+# 同样只加表不改表：create_all 自动建，老库零风险。
+
+class PoolFacet(Base):
+    """池内一档切片。同一 `group_name` 内互斥，不同维度之间叠加（AND）。"""
+    __tablename__ = "pool_facets"
+    __table_args__ = (UniqueConstraint("pool_id", "slug", name="uq_facet_pool_slug"),
+                      Index("ix_facet_pool_group", "pool_id", "group_name", "sort"))
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pool_id: Mapped[int] = mapped_column(ForeignKey("pools.id", ondelete="CASCADE"),
+                                         index=True)
+    group_name: Mapped[str] = mapped_column(String(40))       # 「长度」「束法」
+    slug: Mapped[str] = mapped_column(String(60))             # 池内唯一「len-long」
+    name: Mapped[str] = mapped_column(String(60))             # 「长发」
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+    origin: Mapped[str] = mapped_column(String(20), default="auto")  # auto|inherit|manual
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
+
+
+class PoolItemFacet(Base):
+    """条目 ↔ 切片。一条可以同时属于多个维度（`bald girl` 既「无发」又「异常」）。"""
+    __tablename__ = "pool_item_facets"
+    __table_args__ = (UniqueConstraint("item_id", "facet_id", name="uq_item_facet"),
+                      Index("ix_itemfacet_facet", "facet_id", "item_id"))
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("pool_items.id", ondelete="CASCADE"), index=True)
+    facet_id: Mapped[int] = mapped_column(
+        ForeignKey("pool_facets.id", ondelete="CASCADE"), index=True)
+
+
+class PoolAbsorption(Base):
+    """细分类池收编：danbooru 的 hair_styles_tied 这类池与粗池 100% 重叠，
+    界面不再单列，改由粗池的 facet 承载。数据一条不删，删掉这行即可回滚。"""
+    __tablename__ = "pool_absorption"
+    __table_args__ = (UniqueConstraint("pool_id", name="uq_absorb_one"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pool_id: Mapped[int] = mapped_column(ForeignKey("pools.id", ondelete="CASCADE"),
+                                         index=True)
+    into_pool_id: Mapped[int] = mapped_column(Integer, index=True)
+    facet_slug: Mapped[str] = mapped_column(String(60), default="")
+    reason: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=now)

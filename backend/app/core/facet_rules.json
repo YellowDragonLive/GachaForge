@@ -1,0 +1,158 @@
+{
+  "version": 1,
+  "note": "池内切片规则。同一 group 内按 options 顺序 first-match，跨 group 叠加。catch_rest = 本组剩余条目都归它。from_pool = 继承另一池的条目（用于吸收 danbooru 官方细分池）。改完跑 scripts/build_facets.py --apply。",
+  "absorb": [
+    {"pool": "wc:DanbooruTAG/hair_styles_tied", "into": "wc:人物-头发"},
+    {"pool": "wc:DanbooruTAG/hair_styles_front", "into": "wc:人物-头发"},
+    {"pool": "wc:DanbooruTAG/hair_styles_length", "into": "wc:人物-头发"},
+    {"pool": "wc:DanbooruTAG/hair_styles_texture", "into": "wc:人物-头发"},
+    {"pool": "wc:DanbooruTAG/hair_styles_long", "into": "wc:人物-头发"},
+    {"pool": "wc:DanbooruTAG/hair_styles_short", "into": "wc:人物-头发"},
+    {"pool": "wc:DanbooruTAG/hair_styles_medium", "into": "wc:人物-头发"},
+    {"pool": "wc:DanbooruTAG/hair_styles_back", "into": "wc:人物-头发"},
+    {"pool": "wc:DanbooruTAG/hair_styles_top", "into": "wc:人物-头发"},
+    {"pool": "wc:DanbooruTAG/hair_styles_tall", "into": "wc:人物-头发"},
+    {"pool": "wc:DanbooruTAG/hair_styles_over_the_body", "into": "wc:人物-头发"},
+    {"pool": "wc:DanbooruTAG/hair_styles_misc", "into": "wc:人物-头发"},
+    {"pool": "wc:DanbooruTAG/eyes_around", "into": "wc:人物-眼睛"},
+    {"pool": "wc:DanbooruTAG/eyes_iris_multiple_colors", "into": "wc:人物-眼睛"},
+    {"pool": "wc:DanbooruTAG/eyes_more_appearance_animal", "into": "wc:人物-眼睛"},
+    {"pool": "wc:DanbooruTAG/eyes_sclera", "into": "wc:人物-眼睛"},
+    {"pool": "wc:DanbooruTAG/dress_appearance_colors", "into": "wc:人物-衣服"},
+    {"pool": "wc:DanbooruTAG/dress_appearance_multiple_colors", "into": "wc:人物-衣服"},
+    {"pool": "wc:DanbooruTAG/dress_appearance_patterns_and_prints", "into": "wc:人物-衣服"}
+  ],
+  "pools": [
+    {
+      "pool": "wc:人物-头发",
+      "fields": ["tags", "label"],
+      "groups": [
+        {
+          "name": "长度",
+          "sort": 10,
+          "options": [
+            {"slug": "len-long", "name": "长发", "match": "\\b(very long|absurdly long|floor length|waist length|long)\\b"},
+            {"slug": "len-medium", "name": "中发", "match": "\\bmedium\\b"},
+            {"slug": "len-short", "name": "短发", "match": "\\b(short|pixie|bob|bowl cut|okappa)\\b"},
+            {"slug": "len-none", "name": "无发", "match": "\\b(bald|skinhead)\\b"}
+          ]
+        },
+        {
+          "name": "束法",
+          "sort": 20,
+          "options": [
+            {"slug": "tie-up", "name": "束发", "from_pool": "wc:DanbooruTAG/hair_styles_tied", "match": "\\b(ponytail|twintails?|tails|braid|braided|bun|updo|chignon|french twist|half-up|half up|tied|one side up|two side up|topknot|top knot|mizura|nihongami|hair clip|hairpin)\\b"},
+            {"slug": "tie-loose", "name": "散发", "catch_rest": true}
+          ]
+        },
+        {
+          "name": "质地",
+          "sort": 30,
+          "options": [
+            {"slug": "tex-curl", "name": "卷发", "match": "\\b(curly|curl|wave|wavy|perm|afro|dreadlocks|ringlets)\\b"},
+            {"slug": "tex-layer", "name": "层次", "match": "\\b(layered|choppy|shaggy|feathered)\\b"},
+            {"slug": "tex-straight", "name": "直发", "match": "\\b(straight|slicked back)\\b"},
+            {"slug": "tex-plain", "name": "顺滑", "catch_rest": true}
+          ]
+        },
+        {
+          "name": "刘海",
+          "sort": 40,
+          "options": [
+            {"slug": "bang-yes", "name": "有刘海", "from_pool": "wc:DanbooruTAG/hair_styles_front", "match": "\\b(bangs|fringe|sidelock|ahoge|hair between eyes)\\b"},
+            {"slug": "bang-no", "name": "无刘海", "catch_rest": true}
+          ]
+        },
+        {
+          "name": "性别向",
+          "sort": 50,
+          "options": [
+            {"slug": "sex-male", "name": "男性向", "match": "\\b(buzz cut|crew cut|flattop|undercut|pompadour|mohawk|regent|ivy cut|high and tight|under shave|men's|mens|shouten)\\b"},
+            {"slug": "sex-any", "name": "中性", "catch_rest": true}
+          ]
+        },
+        {
+          "name": "适格",
+          "sort": 60,
+          "options": [
+            {"slug": "odd-yes", "name": "异常向", "match": "\\b(bald|skinhead|mecha|cyborg|robot|bikini|bouquet arrangement|hair intakes|hair wings|hair flaps|antenna|crystal hair|spiked|fins|wings)\\b"},
+            {"slug": "odd-no", "name": "常规", "catch_rest": true}
+          ]
+        }
+      ]
+    },
+    {
+      "pool": "wc:人物-眼睛",
+      "fields": ["tags", "label"],
+      "groups": [
+        {
+          "name": "瞳孔",
+          "sort": 20,
+          "options": [
+            {"slug": "pup-shape", "name": "异形瞳", "match": "\\b(heart-shaped|diamond-shaped|flower-shaped|x-shaped|star-shaped|symbol-shaped|slit|horizontal|ringed|no pupils|compound|dashed)\\b"},
+            {"slug": "pup-normal", "name": "常规瞳", "catch_rest": true}
+          ]
+        },
+        {
+          "name": "适格",
+          "sort": 30,
+          "options": [
+            {"slug": "odd-yes", "name": "异常眼", "match": "(glowing|flaming|hollow|empty|blank|bloodshot|no sclera|sclera|pac-man|button|crazy|sparkling|eye reflection|bruised|bags under|@ @|\\+ \\+|\\bwide-eyed\\b)"},
+            {"slug": "odd-no", "name": "常规", "catch_rest": true}
+          ]
+        }
+      ]
+    },
+    {
+      "pool": "wc:人物-衣服",
+      "fields": ["tags", "label"],
+      "groups": [
+        {
+          "name": "类型",
+          "sort": 10,
+          "options": [
+            {"slug": "ty-swim", "name": "泳装", "match": "\\b(swimsuit|bikini|leotard|one-piece|beach)\\b"},
+            {"slug": "ty-body", "name": "连体装", "match": "\\b(bodysuit|bikesuit|bunnysuit|overalls|jumpsuit|straitjacket|dirndl)\\b"},
+            {"slug": "ty-dress", "name": "连衣裙", "match": "\\b(dress|gown|sundress|babydoll|romper|tutu|uchikake)\\b"},
+            {"slug": "ty-uniform", "name": "制服", "match": "\\b(uniform|serafuku|schoolgirl|sailor|dougi|jersey)\\b"},
+            {"slug": "ty-trad", "name": "传统", "match": "\\b(kimono|china dress|chinese clothes|japanese clothes|cheongsam|hanfu|yukata|obi|harem outfit)\\b"},
+            {"slug": "ty-suit", "name": "西装", "match": "\\b(suit|tuxedo|blazer|formal|business|western)\\b"},
+            {"slug": "ty-under", "name": "内衣", "match": "\\b(lingerie|underwear|bra|panties|thong|naked apron|latex)\\b"},
+            {"slug": "ty-top", "name": "上衣", "match": "\\b(shirt|blouse|sweater|hoodie|jacket|coat|cardigan|vest|parka|top|tee|negligee|nightgown|pajamas|loungewear)\\b"},
+            {"slug": "ty-bottom", "name": "下装", "match": "\\b(pants|jeans|skirt|shorts|trousers|leggings|capri|crinoline|pettiskirt)\\b"},
+            {"slug": "ty-acc", "name": "鞋包配饰", "match": "\\b(shoes|boots|heels|sandals|flats|pumps|bag|backpack|handbag|clutch|necklace|earrings|ring|bracelet|belt|hat|gloves|scarf|jewelry|mittens|ear muffs)\\b"},
+            {"slug": "ty-other", "name": "其他", "catch_rest": true}
+          ]
+        },
+        {
+          "name": "状态",
+          "sort": 20,
+          "options": [
+            {"slug": "st-worn", "name": "破损暴露", "match": "\\b(torn|see-through|open|backless|clothed down|clothes down|nude|naked|topless|side slit|off-shoulder|micro|wet|sheer|hobble)\\b"},
+            {"slug": "st-ok", "name": "完好", "catch_rest": true}
+          ]
+        }
+      ]
+    },
+    {
+      "pool": "wc:人物-女性时尚穿搭",
+      "fields": ["tags", "label"],
+      "groups": [
+        {
+          "name": "类型",
+          "sort": 10,
+          "options": [
+            {"slug": "ty-swim", "name": "泳装", "match": "\\b(swimsuit|bikini|bathing suit|one-piece|swimwear|tankini|swim trunks|sarong|cover-up)\\b"},
+            {"slug": "ty-dress", "name": "连衣裙", "match": "\\b(dress|gown|jumpsuit|romper)\\b"},
+            {"slug": "ty-under", "name": "内衣", "match": "\\b(lingerie|underwear|bra|panties|thong|long johns|base layer)\\b"},
+            {"slug": "ty-top", "name": "上衣", "match": "\\b(shirt|blouse|sweater|hoodie|jacket|coat|cardigan|vest|parka|top|tee|fleece|down|blazer|suit|sunshirt)\\b"},
+            {"slug": "ty-bottom", "name": "下装", "match": "\\b(pants|jeans|skirt|shorts|trousers|leggings|capri|skorts|sarong)\\b"},
+            {"slug": "ty-hose", "name": "袜", "match": "\\b(socks|stockings|tights|pantyhose|leggings)\\b"},
+            {"slug": "ty-acc", "name": "鞋包配饰", "match": "\\b(shoes|boots|heels|sandals|flats|pumps|sneakers|espadrilles|wedges|stilettos|bag|backpack|handbag|clutch|purse|tote|wallet|watch|necklace|earrings|ring|bracelet|belt|hat|gloves|scarf|jewelry|mittens|ear muffs|balaclava|brooch|sunglasses|goggles|visor|umbrella|shawl|wrap|gaiter|facemask|headband|arm warmers|leg warmers|knee warmers|hand warmers|hair accessory|keychain|sunscreen)\\b"},
+            {"slug": "ty-other", "name": "其他", "catch_rest": true}
+          ]
+        }
+      ]
+    }
+  ]
+}
