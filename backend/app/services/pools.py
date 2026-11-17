@@ -49,17 +49,43 @@ def _q_clauses(q: str) -> list:
     return out
 
 
-def list_pools(db: Session, *, enabled_only: bool = False) -> list[dict]:
+def list_pools(db: Session, *, enabled_only: bool = False,
+               include_absorbed: bool = False) -> list[dict]:
+    """池列表。默认不列「已收编」的细分池。
+
+    danbooru 的 hair_styles_tied 这类池与粗池 100% 重叠（见 facet_rules.json 的
+    absorb 段），界面上再单列一遍只是把同一批货摆两个入口，推荐排序还会被 30 个
+    碎片池淹掉。条目一条没删，`include_absorbed=True` 就能看回来。
+    """
+    from . import facets as facet_svc
+    absorbed = facet_svc.absorbed_map(db)
     stmt = select(Pool).order_by(Pool.kind, Pool.slug)
     if enabled_only:
         stmt = stmt.where(Pool.enabled.is_(True))
     rows = db.scalars(stmt).all()
     counts = dict(db.execute(
         select(PoolItem.pool_id, func.count()).group_by(PoolItem.pool_id)).all())
-    return [{"id": p.id, "slug": p.slug, "name": p.name, "kind": p.kind,
-             "source": p.source, "source_ref": p.source_ref,
-             "enabled": p.enabled, "weight": p.weight,
-             "item_count": int(counts.get(p.id, 0))} for p in rows]
+    # 这个池能被切几刀。前端用它决定「打开选择器时先落在哪个池」——
+    # 点「衣着」先看到能按类型细化的 190 条，而不是 740 条一整套的盲盒预设。
+    from ..models import PoolFacet
+    facet_counts = dict(db.execute(
+        select(PoolFacet.pool_id, func.count(func.distinct(PoolFacet.group_name)))
+        .group_by(PoolFacet.pool_id)).all())
+    out = []
+    for p in rows:
+        ab = absorbed.get(p.id) if p.id in absorbed else None
+        if ab and not include_absorbed:
+            continue
+        row = {"id": p.id, "slug": p.slug, "name": p.name, "kind": p.kind,
+               "source": p.source, "source_ref": p.source_ref,
+               "enabled": p.enabled, "weight": p.weight,
+               "item_count": int(counts.get(p.id, 0)),
+               "facet_groups": int(facet_counts.get(p.id, 0))}
+        if ab:
+            row["absorbed_into"] = ab["into"]
+            row["absorbed_reason"] = ab["reason"]
+        out.append(row)
+    return out
 
 
 def get_pool(db: Session, pool_id: int) -> Pool:
@@ -209,12 +235,15 @@ def suggest_tags(db: Session, *, q: str = "", pool: str = "", limit: int = 30) -
 
 
 def list_items(db: Session, *, kind: str = "", q: str = "", pool: str = "",
-               limit: int = 60, offset: int = 0) -> dict:
+               limit: int = 60, offset: int = 0, facets: str = "") -> dict:
     """装配面板的选择器：按类别 / 池名列出条目本身（不是 tag）。
 
     和 suggest_tags 的区别：那个给的是「过滤表达式的关键字」，会刻意跳过带逗号的
     长 label（塞进 `池:tag` 表达式会被逗号切碎）；装配面板的 pick 直接按 label
     锁定整条，所以这里要原样返回 label + tags，长的也要。
+
+    `facets`（逗号分隔的切片 slug）只在**指定了唯一池**时生效：跨池浏览时切片
+    各池不一样，硬套一个池的切片会把别的池筛空。
     """
     base = select(PoolItem, Pool).join(Pool, Pool.id == PoolItem.pool_id)
     kk = (kind or "").strip()
@@ -224,6 +253,16 @@ def list_items(db: Session, *, kind: str = "", q: str = "", pool: str = "",
     if pk:
         base = base.where(func.lower(Pool.name).contains(pk)
                           | func.lower(Pool.slug).contains(pk))
+    picked = [s.strip() for s in str(facets or "").split(",") if s.strip()]
+    facet_hit = None
+    if pk and picked:
+        from . import facets as facet_svc
+        target = db.scalar(select(Pool).where(
+            (func.lower(Pool.name) == pk) | (func.lower(Pool.slug) == pk)))
+        if target:
+            facet_hit = facet_svc.item_ids_for(db, target.id, picked)
+    if facet_hit is not None:
+        base = base.where(PoolItem.id.in_(list(facet_hit)))
     clauses = _q_clauses(q)
     if clauses:
         base = base.where(*clauses)
@@ -313,8 +352,15 @@ def delete_item(db: Session, item_id: int) -> None:
 
 
 def pools_for_draw(db: Session, slugs: list[str] | None = None,
-                   *, include_disabled_pool: bool = False) -> list[PoolData]:
-    """把 DB 里的启用的池组装成 core 需要的 PoolData。"""
+                   *, include_disabled_pool: bool = False,
+                   facets: dict[str, list[str]] | None = None) -> list[PoolData]:
+    """把 DB 里的启用的池组装成 core 需要的 PoolData。
+
+    `facets`：`{池 slug: [切片 slug]}`。命中切片时只在该子集里抽，
+    不传或该池没有切片 = 原行为（整个池）。跨组 AND、组内 OR。
+    """
+    from . import facets as facet_svc
+    absorbed = facet_svc.absorbed_ids(db)
     stmt = select(Pool)
     if not include_disabled_pool:
         stmt = stmt.where(Pool.enabled.is_(True))
@@ -323,13 +369,19 @@ def pools_for_draw(db: Session, slugs: list[str] | None = None,
     pools = db.scalars(stmt.order_by(Pool.id)).all()
     result: list[PoolData] = []
     for p in pools:
+        # 已收编的细分池不参与抽卡：它们的条目已经在粗池里，再抽一遍等于双倍权重。
+        if p.id in absorbed:
+            continue
         rows = db.execute(
-            select(PoolItem.label, PoolItem.tags).where(
+            select(PoolItem.id, PoolItem.label, PoolItem.tags).where(
                 PoolItem.pool_id == p.id, PoolItem.enabled.is_(True))
             .order_by(PoolItem.id)).all()
+        keep = facet_svc.item_ids_for(db, p.id, (facets or {}).get(p.slug) or [])
+        if keep is not None:
+            rows = [r for r in rows if r[0] in keep]
         if rows:
             result.append(PoolData(p.slug, p.kind, p.source_ref,
-                                   [Item(r[0], r[1]) for r in rows]))
+                                   [Item(r[1], r[2]) for r in rows]))
     return result
 
 

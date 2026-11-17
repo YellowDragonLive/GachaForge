@@ -140,6 +140,8 @@ class DrawSessionIn(BaseModel):
     filter: str = ""
     no_repeat: bool = False
     gen_profile_id: int | None = None
+    # 池内切片：{池名或 slug: [切片 slug]}。空 = 整池随机，与没有这个功能时一致。
+    facets: dict[str, list[str]] = {}
 
 
 class JobsIn(BaseModel):

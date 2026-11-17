@@ -25,7 +25,7 @@ from ..models import (Draw, DrawSession, DrawSlot, DrawSlotTag, GenProfile,
                       SessionLora, SessionProfile, SessionRecipe,
                       SessionRecipeSlot, ProfileParam, SlotExtra)
 from . import pools as pool_svc
-
+from . import facets as facet_svc
 
 # ---------------- 配方 ----------------
 
@@ -452,7 +452,15 @@ def create_session(db: Session, params: dict) -> dict:
                 overridden_filters.append(f"{slot.get('pool')}={slot['filter']}")
                 slot["filter"] = ""
 
-    all_pools = pool_svc.pools_for_draw(db, params.get("pool_slugs") or None)
+    # 池内切片：`{池名: [切片 slug]}`。命中时只在该子集里抽，不传 = 整个池，
+    # 所以老客户端与老配方行为完全不变。跨组 AND、组内 OR（见 services/facets）。
+    raw_facets = params.get("facets") or {}
+    facet_slugs = {}
+    if isinstance(raw_facets, dict) and raw_facets:
+        facet_slugs = facet_svc.facets_for_pools(db, raw_facets)
+
+    all_pools = pool_svc.pools_for_draw(db, params.get("pool_slugs") or None,
+                                        facets=facet_slugs or None)
     if not all_pools:
         raise ConflictError("没有可用的卡池，请先在「卡池管理」导入或启用卡池")
     raw_selected = pick_pools(all_pools, params.get("pool_slugs") or "")

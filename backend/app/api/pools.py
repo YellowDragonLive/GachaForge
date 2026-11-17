@@ -14,8 +14,11 @@ router = APIRouter(prefix="/api/pools", tags=["pools"])
 
 
 @router.get("")
-def list_pools(enabled_only: bool = False, db: Session = Depends(get_db)):
-    return ok(svc.list_pools(db, enabled_only=enabled_only))
+def list_pools(enabled_only: bool = False, include_absorbed: bool = False,
+               db: Session = Depends(get_db)):
+    """`include_absorbed=true` 才列出已收编的细分池（默认隐藏，数据仍在）。"""
+    return ok(svc.list_pools(db, enabled_only=enabled_only,
+                             include_absorbed=include_absorbed))
 
 
 @router.post("")
@@ -38,12 +41,15 @@ def tag_suggest(q: str = "", pool: str = "", limit: int = Query(30, ge=1, le=100
 
 
 @router.get("/items")
-def list_items(kind: str = "", q: str = "", pool: str = "",
+def list_items(kind: str = "", q: str = "", pool: str = "", facets: str = "",
                limit: int = Query(60, ge=1, le=200),
                offset: int = Query(0, ge=0),
                db: Session = Depends(get_db)):
-    """装配面板的选择器数据源：按类别列出条目本身，供锁定到具体 tag。"""
-    return ok(svc.list_items(db, kind=kind, q=q, pool=pool,
+    """装配面板的选择器数据源：按类别列出条目本身，供锁定到具体 tag。
+
+    `facets` 是逗号分隔的切片 slug，只在 pool 精确命中唯一池时生效。
+    """
+    return ok(svc.list_items(db, kind=kind, q=q, pool=pool, facets=facets,
                              limit=limit, offset=offset))
 
 
@@ -80,6 +86,17 @@ def delete_pool(pool_id: int, db: Session = Depends(get_db)):
 def list_items(pool_id: int, q: str = "", limit: int = Query(100, le=500),
                offset: int = 0, db: Session = Depends(get_db)):
     return ok(svc.list_pool_items(db, pool_id, q=q, limit=limit, offset=offset))
+
+
+@router.get("/{pool_id}/facets")
+def pool_facets(pool_id: int, db: Session = Depends(get_db)):
+    """池内切片：把一个混装多维度的大池按维度切开后的可选档位与条数。
+
+    只有能真正切掉一部分的组才返回（一档吃掉全池的维度对用户没有意义）。
+    """
+    from ..services import facets as facet_svc
+    svc.get_pool(db, pool_id)
+    return ok(facet_svc.facets_for_pool(db, pool_id))
 
 
 @router.post("/{pool_id}/items")
