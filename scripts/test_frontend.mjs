@@ -648,12 +648,14 @@ const cases = [
       '状态变化时任务卡描边要同步');
     assert.match(app, /loadPortraits\(\)\.catch/,
       '立绘必须异步补，不能阻塞面板渲染');
-    // 冷启动立绘：真实出图封面优先，没有才回退角色缩略图；404 不塞坏图
+    // 立绘优先级：人工挑选的专门图（角色参考图）优先，抽卡生成封面回退；404 不塞坏图
     const covers = readFileSync(new URL('../frontend/features/covers.js', import.meta.url), 'utf8');
     assert.match(covers, /\/api\/semantics\/character-thumb\?name=/,
       '立绘缺图时要能回退到角色冷启动缩略图');
-    assert.ok(covers.indexOf('await api.get(\'/api/concepts/cover?') < covers.indexOf('await loadCharThumb(key)'),
-      '真实出图封面必须在冷启动缩略图之前尝试（出过的图不能被参考图盖掉）');
+    // 限定在 loadPortrait 函数体内比：文件前面概念页也有个 cover? 调用，全局 indexOf 会命中它
+    const portraitFn = covers.slice(covers.indexOf('export async function loadPortrait'));
+    assert.ok(portraitFn.indexOf('await loadCharThumb(key)') < portraitFn.indexOf('await api.get(\'/api/concepts/cover?'),
+      '人工挑选的角色参考图必须先于抽卡封面尝试（专门图不能被随机出图盖掉）');
     assert.match(covers, /img\.onerror/,
       '缩略图 404 时只当没有，绝不往 DOM 塞坏图');
     assert.match(css, /\.quest\[data-status="running"\]\s*\.bar\s*>\s*i/,

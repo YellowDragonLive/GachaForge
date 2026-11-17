@@ -118,8 +118,9 @@ export function onThumbOut(e) {
 
 // ---------------- 状态栏立绘：常驻一张，按概念 key 缓存 ----------------
 // 和 hover 浮层不同：立绘是状态栏的一部分，必须一直在，才能和右栏出的图并排比对。
-// 两轮取图：先找真实出过的概念封面（最可信），没有再回退到外部角色的冷启动缩略图。
-// 后者是「这个角色长什么样」的参考，不是它出过的图，所以真实封面一律优先。
+// 取图优先级是用户定的硬规则：人工专门挑选过的图（角色参考图 / 画师样图）永远优先，
+// 抽卡随机生成的概念封面向后。前者是人为挑过的「这个角色该长什么样」，质量有保证；
+// 后者只是随机结果，不能盖过人工挑选。靠这一点也能直接拿出的图去对照参考图。
 const CHAR_THUMB = '/api/semantics/character-thumb?name=';
 
 /** 冷启动缩略图是否存在：用 Image 预载，404 就当没有，绝不往 DOM 塞坏图。 */
@@ -147,7 +148,15 @@ export async function loadPortrait(el) {
   const keys = String(el.dataset.portrait || '').split(',').filter(Boolean);
   el.dataset.loaded = '1';
   if (!keys.length) return;
-  // 第一轮：真实出图的概念封面 —— 立绘的最终形态，任何补充图都不能盖过它。
+  // 第一轮：人工专门挑选的图优先 —— 外部角色参考图（画师样图同理，走 hover 直接挂）。
+  for (const key of keys) {
+    const c = await loadCharThumb(key);
+    if (c) {
+      paintPortrait(el, c);
+      return;
+    }
+  }
+  // 第二轮：没有人工挑选的图，才回退到抽卡真实出过的概念封面。
   for (const key of keys) {
     if (!(key in state.portraits)) {
       try {
@@ -163,15 +172,7 @@ export async function loadPortrait(el) {
       return;
     }
   }
-  // 第二轮：一个都没出过图 → 回退到外部角色缩略图（冷启动补充）。
-  for (const key of keys) {
-    const c = await loadCharThumb(key);
-    if (c) {
-      paintPortrait(el, c);
-      return;
-    }
-  }
-  el.dataset.miss = '1';   // 这个角色既没出过图也没有参考缩略图：留着占位
+  el.dataset.miss = '1';   // 既没有人工参考图也没出过图：留着占位等生成
 }
 
 export function paintPortrait(el, cover) {
