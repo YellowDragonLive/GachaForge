@@ -841,6 +841,26 @@ const cases = [
     assert.match(py, /replace\(func\.lower\(PoolItem\.tags\), "_", " "\)/,
       '后端也要把下划线归一成空格');
   }],
+  ['模型枚举：权重池按 workflow 的加载器分（UNet 与 checkpoint 是两套目录）', () => {
+    // MOSS / Anima 是纯 UNet，文件在 models/unet；SDXL 是完整 checkpoint，在
+    // models/checkpoints。ComfyUI 这两套枚举互不相通，前端写死任何一边都会让
+    // 用户「装好了模型却在下拉里搜不到」——2026-11-17 实际踩过这个坑。
+    const gen = readFileSync(new URL('../frontend/features/generation.js', import.meta.url), 'utf8');
+    const settings = readFileSync(new URL('../frontend/views/settings.js', import.meta.url), 'utf8');
+    const draw = readFileSync(new URL('../frontend/views/draw.js', import.meta.url), 'utf8');
+    assert.match(gen, /export function ckptPoolKey/, '要有「按 workflow 选权重池」的唯一出口');
+    assert.match(gen, /ckpt_kind === 'unet'/, '加载器类型由后端 spec 判定，前端不猜');
+    for (const [who, src] of [['设置页', settings], ['调参抽屉', draw]]) {
+      assert.match(src, /ckptPoolKey\(/, `${who}的 checkpoint 候选要跟着 workflow 走`);
+    }
+    assert.doesNotMatch(settings, /optionsWithCurrent\(state\.models\?\.checkpoints/,
+      '设置页不能把候选写死成 models/checkpoints（否则纯 UNet 模型选不到）');
+    const py = readFileSync(new URL('../backend/app/services/comfy.py', import.meta.url), 'utf8');
+    assert.match(py, /UNETLoader", "unet_name"/, '后端要单独枚举 UNet 列表');
+    const wf = readFileSync(new URL('../backend/app/core/workflow.py', import.meta.url), 'utf8');
+    assert.match(wf, /ckpt_kind/, 'spec 要标出 $CKPT 落在哪个加载器上');
+    assert.match(wf, /"defaults": \{k: defaults\.get\(k\)/, 'spec 要透出换族要跟着换的默认值');
+  }],
   ['超重权重：只在组装 prompt 时剥，池子文本不动', () => {
     const recipes = readFileSync(new URL('../backend/app/core/recipes.py', import.meta.url), 'utf8');
     const poolsPy = readFileSync(new URL('../backend/app/core/pools.py', import.meta.url), 'utf8');

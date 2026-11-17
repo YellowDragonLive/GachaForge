@@ -730,6 +730,22 @@ def main() -> int:
               len(cfg.get("workflow_specs", [])) >= 2
               and all("capabilities" in w for w in cfg["workflow_specs"]),
               str([w.get("id") for w in cfg.get("workflow_specs", [])]))
+        # 纯 UNet（MOSS/Anima）与完整 checkpoint（SDXL）在 ComfyUI 里是两个目录、
+        # 两套枚举。spec 必须标明归哪边，前端才能列出正确的候选。
+        kinds = {w["name"]: w.get("ckpt_kind") for w in cfg["workflow_specs"]}
+        check("权重加载器类型由 spec 标明（UNet / checkpoint）",
+              kinds.get("moss.json") == "unet" and kinds.get("anima.json") == "unet"
+              and kinds.get("sdxl_minimal.json") == "checkpoint", str(kinds))
+        defaults = {w["name"]: (w.get("defaults") or {}) for w in cfg["workflow_specs"]}
+        check("spec 透出换模型族要跟着换的默认权重",
+              defaults.get("moss.json", {}).get("CKPT")
+              and defaults.get("moss.json", {}).get("CLIP") == "qwen3.5_9b_w4a8_gptq.safetensors"
+              and defaults.get("moss.json", {}).get("STEPS"),
+              str(defaults.get("moss.json")))
+        models = c.get("/api/comfy/models").json()["data"]
+        check("/api/comfy/models 单独下发 UNet 列表（否则纯 UNet 模型在前端不可选）",
+              isinstance(models.get("unet"), list),
+              f"unet={len(models.get('unet') or [])} ckpt={len(models.get('checkpoints') or [])}")
         import sqlite3 as _sq
         _db = _sq.connect(str(get_settings().db_path))
         _tables = {r[0] for r in _db.execute(
