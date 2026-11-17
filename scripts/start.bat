@@ -1,6 +1,9 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0.."
+REM A named console window is the user's handle on this server: visible in the
+REM taskbar, closable with Ctrl+C or the X button. Never hide this process.
+title Gacha Server - Ctrl+C or close window to stop
 setlocal EnableDelayedExpansion
 
 echo ============================================================
@@ -121,17 +124,15 @@ goto :comfy_checked
 REM Build artist semantic index offline on first run; warns only, never blocks startup
 "%PY%" scripts\build_semantics.py --if-missing
 
-REM ---- Already running? -----------------------------------------------------
-REM uvicorn exits immediately when the port is taken and the old bat went
-REM straight to :eof - the window just flashed. Probe first: if the server is
-REM already up, open the browser, explain how to restart, and wait for a key.
-"%PY%" scripts\probe_server.py --open
+REM ---- Free the port first --------------------------------------------------
+REM One double-click = one fresh server. A previous run (or a background task
+REM that had no window) may still own the port; uvicorn would die on [Errno 10048]
+REM and the window would flash away. Clear it before starting, no prompt needed.
+REM If the port is held by something else (e.g. ComfyUI), probe_server --kill
+REM refuses to touch it and exits 1 -> we stop here with a readable message.
 REM Use goto labels, not a multi-line if block: cmd mis-parses those on LF bats.
-if errorlevel 1 goto :server_down
-echo [start] Server is already running - browser opened, nothing to start.
-echo [start] To restart with new code, close the old server window first.
-if not "%GACHA_NO_PAUSE%"=="1" pause
-goto :eof
+"%PY%" scripts\probe_server.py --kill
+if errorlevel 1 goto :fail
 
 :server_down
 echo [start] Starting server - browser opens automatically...

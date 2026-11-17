@@ -862,9 +862,9 @@ def main() -> int:
               and "GACHA_PYTHON" in bat
               and '"%PY%" scripts\\run_server.py' in bat
               and "WorkBuddy bundled Python" in bat)
-        check("start.bat 服务已在跑时先探测，不再撞端口闪退",
-              "scripts\\probe_server.py --open" in bat
-              and "if errorlevel 1 goto :server_down" in bat
+        check("start.bat 启动前先清端口（kill-then-start，不再撞端口闪退）",
+              "scripts\\probe_server.py --kill" in bat
+              and "if errorlevel 1 goto :fail" in bat
               and ":server_down" in bat)
         check("start.bat 启动失败落到 :fail 并 pause（窗口不闪）",
               '"%PY%" scripts\\run_server.py || goto :fail' in bat
@@ -874,9 +874,13 @@ def main() -> int:
               b"\r\n" in raw_bat
               and b"\n" not in raw_bat.replace(b"\r\n", b""))
         probe_script = ROOT / "scripts" / "probe_server.py"
-        check("服务探测脚本存在（0=已运行，1=没在跑）",
+        probe_src = probe_script.read_text(encoding="utf-8") if probe_script.is_file() else ""
+        check("服务探测脚本存在（--kill 清端口，只杀自己的进程）",
               probe_script.is_file()
-              and "socket.create_connection" in probe_script.read_text(encoding="utf-8"))
+              and "socket.create_connection" in probe_src
+              and "--kill" in probe_src
+              and "taskkill" in probe_src
+              and 'run_server.py" in cmd' in probe_src)
         vd = ROOT / "vendor" / "pydeps"
         check("本机依赖已搬入 vendor/pydeps",
               (vd / "onnxruntime" / "__init__.py").is_file()
