@@ -799,6 +799,42 @@ const cases = [
     const css = readFileSync(new URL('../frontend/styles.css', import.meta.url), 'utf8');
     assert.match(css, /\.asm-pools\s*\{[^}]*overflow-x:\s*auto/, 'chip 行横向滚动，不折行');
   }],
+  ['随机范围：挑过的池记进格子、跟着出图、重开不丢', () => {
+    const p = W.makePerson(1);
+    assert.ok('pool' in p.slots.action && 'pool_slug' in p.slots.action,
+      '槽位要能记住随机范围，否则关掉选择器就退回默认池');
+    p.slots.action.mode = 'random';
+    let def = W.assemblyToDefinition({ people: [p], scene: W.makeScene() });
+    let s = def.slots.find((x) => x.group === 'P1' && x.mode === 'random');
+    assert.equal(s.pool, '动作', '没挑过池 = 按部位整类抽（加功能之前的旧行为）');
+    // 挑过池：只在这个池里摇，用 slug 精确命中（中文名会被 resolve_pools 的子串匹配带走）
+    p.slots.action.pool = '人物-动作';
+    p.slots.action.pool_slug = 'wc:人物-动作';
+    def = W.assemblyToDefinition({ people: [p], scene: W.makeScene() });
+    s = def.slots.find((x) => x.group === 'P1' && x.mode === 'random');
+    assert.equal(s.pool, 'wc:人物-动作', '挑过池就只在这个池里抽');
+    const app = frontendSrc();
+    assert.match(app, /const remembered = String\(cfg\.pool \|\| ''\)/,
+      '重开同一格要恢复上次挑的池，不能被默认池替换');
+    assert.match(app, /a\.pickerPool = alive \? remembered/,
+      '只有池被收编/删掉时才退回默认池');
+    assert.match(app, /asmSetSlotPool\(a\.pickerPool\)/, '点 chip / 选下拉都要把范围写回格子');
+    assert.match(app, /class="part-pool"/, '「随机」后面要标出池名，否则范围等于没说');
+    assert.match(app, /`\$\{c\.kind \|\| '全部'\}池`/, '没挑池时也要标「动作池」这类默认范围');
+    assert.match(app, /hit && hit\.enabled === false/, '冷存池不能当随机范围（写了也抽不到，等于假标签）');
+    assert.match(app, /asm-cold/, '选了冷存池要在选择器里明说：只能挑条目，不能随机');
+    // 锁定值自带 tags：池被禁用 / 换范围 / 条目被删时，后端靠它兜底
+    p.slots.action.mode = 'locked';
+    p.slots.action.pick = 'walking';
+    p.slots.action.tags = 'walking, 1girl';
+    def = W.assemblyToDefinition({ people: [p], scene: W.makeScene() });
+    s = def.slots.find((x) => x.group === 'P1' && x.mode === 'locked');
+    assert.equal(s.pick_tags, 'walking, 1girl', '锁定的条目要带上自己的 tags，池没了也不丢值');
+    const rec = readFileSync(new URL('../backend/app/core/recipes.py', import.meta.url), 'utf8');
+    assert.match(rec, /tags = pick_tags\(all_pools, pick\)/,
+      '换了随机范围不该连坐已锁定的条目（锁的是「这条不变」）');
+    assert.match(rec, /slot\.get\("pick_tags"\)/, '池里真找不到时要用锁定时存下的 tags 兜底');
+  }],
   ['快速筛选：`black h` 要能命中 `black hair`', () => {
     // 用户口径：每个长列表旁边一个 input，打半个词就能筛
     assert.ok(W.matchQuery('black hair, long hair', 'black h'), '半截词必须命中');

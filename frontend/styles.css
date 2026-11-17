@@ -290,6 +290,8 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
   overflow-x: auto; scrollbar-width: thin; }
 .asm-pools::-webkit-scrollbar { height: 4px; }
 .asm-pools::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+/* 冷存池提示：挑了池却不能用来随机，必须显式说一句 */
+.asm-cold { color: var(--warn); margin: 2px 0 0; line-height: 1.4; }
 .pool-chip { flex: none; display: inline-flex; align-items: baseline; gap: 4px;
   border: 1px solid var(--line); background: var(--surface); color: var(--text);
   font-size: 11px; line-height: 1.5; padding: 2px 7px; border-radius: 999px;
@@ -408,6 +410,10 @@ details.advanced > input, details.advanced > textarea, details.advanced > div.hi
 .part.m-locked .part-k { color: var(--primary); }
 .part.m-locked .part-v { font-weight: 500; }
 .part.m-random .part-v { color: var(--muted); }
+/* 随机范围：'随机 · 人物-动作'。池名比「随机」深一点——状态是灰的，范围是定过的。
+   窄格靠 ellipsis 收，全名在 title 里；绝不因为放不下就把池名藏起来。 */
+.part-pool { font-style: normal; margin-left: 3px; font-size: 10px; color: var(--text); opacity: .72; }
+.part-pool::before { content: '·'; margin-right: 3px; opacity: .6; }
 .part.m-off { opacity: .5; }
 .part.open { border-style: solid; border-color: var(--primary);
   box-shadow: 0 0 0 2px var(--primary-soft); }

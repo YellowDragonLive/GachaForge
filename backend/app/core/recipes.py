@@ -197,6 +197,7 @@ def run_recipe(recipe: dict[str, Any], all_pools: list[PoolData], rng) -> dict:
         group_key = str(slot.get("group") or "").strip()
         slot_mode = str(slot.get("mode") or "").strip()
         locked: list[str] = []
+        from_tags = False       # 锁定的条目不是从池里查到的，而是用它自带的 tags
         if free:
             # 手填的任意值：不查池子，也不吃 filter。池里没有的东西一样要能用——
             # 自造词、外部画师名、`(masterpiece:1.2)` 这类 A1111 语法都走这条。
@@ -206,6 +207,17 @@ def run_recipe(recipe: dict[str, Any], all_pools: list[PoolData], rng) -> dict:
         elif pick:
             # 锁定优先且不吃 filter：用户明确点了这件衣服，就不该被筛选条件再筛掉。
             tags = pick_tags(pools, pick)
+            if tags is None:
+                # 换随机范围（选了别的池）不该连坐已锁定的条目：锁的是「这条不变」，
+                # 不是「这条必须还在我刚挑的池里」。回退到全部池再找一遍。
+                tags = pick_tags(all_pools, pick)
+            if tags is None:
+                # 池被禁用 / 条目被删：锁定值自带 tags 时直接用。
+                # 「锁定」的承诺是「这一抽不变」，不该因为池被关掉就失效。
+                raw = str(slot.get("pick_tags") or "").strip()
+                tags = [t.strip() for t in raw.split(",") if t.strip()] or None
+                if tags:
+                    from_tags = True
             if tags is None:
                 detail.append({
                     "slot": name, "tags": [], "empty": True,
@@ -226,6 +238,8 @@ def run_recipe(recipe: dict[str, Any], all_pools: list[PoolData], rng) -> dict:
                 item["locked"] = locked[0]
             if free:
                 item["free"] = True      # 前端据此标「手填」，不和池里抽到的混在一起
+            if from_tags:
+                item["locked_from_tags"] = True   # 池里查不到，用的是锁定时存下的 tags
             if removed_count:
                 item["dropped_count_tags"] = removed_count
             detail.append(item)

@@ -356,6 +356,71 @@ def main() -> int:
               any(n == "DanbooruTAG/hair_styles_tied" for n in allp)
               and len(allp) > len(vis), f"{len(allp)} - {len(vis)} = 隐藏 {len(allp)-len(vis)}")
 
+        print("-- 随机范围：格子挑过的池就是这一格的抽卡边界 --")
+        # 「随机」以前是整类池乱摇：格子上只写「随机」，用户不知道范围是什么，
+        # 关掉选择器挑过的池也丢了。现在范围由前端存进槽位（slug 精确命中），
+        # 中文名会被 resolve_pools 的子串匹配连带命中同类其他池（`动作` → 61 池）。
+        def _all_items(pname: str) -> list[dict]:
+            """端点单页最多 200 条，几百条的池要翻页取全，否则判据会假失败。"""
+            got, off = [], 0
+            while True:
+                page = c.get("/api/pools/items", params={
+                    "pool": pname, "limit": 200, "offset": off}).json()["data"]
+                got.extend(page["items"])
+                off += 200
+                if not page["items"] or len(got) >= page["total"]:
+                    return got
+
+        act = next((p for p in pools if p["name"] == "人物-摆位"), None)
+        check("随机范围：启用中的动作池在池列表里", bool(act),
+              f"{act['item_count'] if act else 0} 条")
+        if act:
+            items = _all_items("人物-摆位")
+            tags = {i["tags"].strip() for i in items if i["tags"]}
+            got, stripped = set(), 0
+            for seed in range(1, 7):
+                ds = c.post("/api/draw-sessions", json={
+                    "pulls": 5, "count": 1, "seed": seed,
+                    "definition": {"slots": [{"pool": act["slug"], "count": 1}]},
+                }).json()["data"]
+                for d in ds["draws"]:
+                    p = (d.get("prompt") or "").strip()
+                    if p:
+                        got.add(p)
+                    else:
+                        # 抽到只含人数 tag 的条目会被 strip_count_tags 剥成空，
+                        # 这是设计行为（人数由装配面板统一写），不算串池。
+                        stripped += 1
+            check("按池 slug 抽只落在该池（不串到同类的其他池）",
+                  bool(got) and got <= tags,
+                  f"{len(got)} 种 / 池 {len(tags)} 条 · 剥人数 {stripped} · 越界 {sorted(got - tags)[:3]}")
+            # 没挑过池的老配置 / 老会话仍按类别抽：这是「零回归」的判据
+            check("没挑池仍按类别抽（旧行为不变）",
+                  c.post("/api/draw-sessions", json={
+                      "pulls": 1, "count": 1, "seed": 5,
+                      "definition": {"slots": [{"pool": "动作", "count": 1}]},
+                  }).status_code == 200)
+        # 锁定不该被「池被禁用 / 换了范围」连坐：锁定值自带 tags，后端按它兜底。
+        # 冷存池（enabled=0）的条目根本进不了 pools_for_draw，正好当这个场景的样本。
+        cold = next((p for p in pools if p["name"] == "人物-动作"), None)
+        if cold and cold["enabled"] is False:
+            citems = _all_items("人物-动作")
+            one = next((i for i in citems
+                        if (i["label"] or "").strip() == (i["tags"] or "").strip()), None)
+            if one:
+                lock = c.post("/api/draw-sessions", json={
+                    "pulls": 1, "count": 1, "seed": 2,
+                    "definition": {"slots": [{
+                        "pool": "人物-动作", "pick": one["label"],
+                        "pick_tags": one["tags"], "mode": "locked"}]},
+                }).json()["data"]["draws"][0]
+                check("冷存池的锁定条目仍能出图（用锁定时存的 tags 兜底）",
+                      (one["tags"] or "").lower() in (lock["prompt"] or "").lower(),
+                      f"{one['label']} ← {lock['prompt']}")
+            else:
+                check("冷存池的锁定条目仍能出图（用锁定时存的 tags 兜底）", False,
+                      "池里没有 label=tags 的样本")
+
         print("-- 画师图鉴：条目名 → 风格样图 --")
         # 文件名是 `<序号>_<原 tag>_result.png`，池里的 tag 带 `artist:` / `rib:` 前缀，
         # 归一化必须两边都能对上，否则一千多条名字里大部分都查不到图。

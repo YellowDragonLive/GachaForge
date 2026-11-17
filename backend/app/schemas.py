@@ -70,6 +70,9 @@ class Slot(BaseModel):
     filter: str = ""
     # 锁定到具体条目（按 label 匹配）：填了就取这一条、不随机，也不吃 filter。
     pick: str = ""
+    # 锁定值自己带着的 tags（前端点条目时存下来的英文串）。按 label 查不到时用它兜底：
+    # 条目所在的池被禁用 / 条目被删 / 换了随机范围，锁定的东西不该因此凭空消失。
+    pick_tags: str = ""
     # 手填的任意值（不局限于池子）：填了就按原文写进 prompt，不查池子、不吃 filter。
     # 与 pick 互斥，run_recipe 优先认 free —— 池里改过名、外来的词、自造 tag 都靠它。
     free: str = ""

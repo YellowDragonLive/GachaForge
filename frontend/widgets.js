@@ -457,7 +457,10 @@ export const SLOT_MODES = ['random', 'locked', 'off'];
 export function makePerson(uid, gender = 'female') {
   const slots = {};
   for (const d of PERSON_SLOTS) {
-    slots[d.key] = { kind: d.kind, mode: d.fallback, pick: '', tags: '' };
+    // pool / pool_slug：这一格的「随机范围」。空 = 该部位的全部池（老行为），
+    // 有值 = 只在这个池里摇。锁定时它只是回到原池的线索，不参与出图。
+    slots[d.key] = { kind: d.kind, mode: d.fallback, pick: '', tags: '',
+      pool: '', pool_slug: '' };
   }
   // extra = 这个人物「意群」的自由输入：池里没有的 tag 从这里补。
   // 一个人物卡 = 一个意群，extra 只描述这个人，不会漏到别人身上。
@@ -470,7 +473,8 @@ export function makePerson(uid, gender = 'female') {
 export function makeScene() {
   const scene = {};
   for (const d of SCENE_SLOTS) {
-    scene[d.key] = { kind: d.kind, mode: d.fallback, pick: '', tags: '' };
+    scene[d.key] = { kind: d.kind, mode: d.fallback, pick: '', tags: '',
+      pool: '', pool_slug: '' };
   }
   scene.extra = '';
   scene.draft = '';
@@ -528,11 +532,19 @@ export function assemblyToDefinition(assembly) {
     if (!cfg || cfg.mode === 'off') return;
     // group 是意群归属（场景 / P1 / P2…），必须显式传给后端存进关系表；
     // 只靠 pool 字符串前缀表达归属是补丁做法，刷新页面后就丢了。
-    const slot = { pool: cfg.kind || '', count: 1, weight: 1, group, mode: cfg.mode };
+    // 随机范围：挑过池就只在这个池里摇（优先用 slug 精确命中——中文名会被
+    // resolve_pools 的子串匹配带到别的池）；没挑过才退回该部位的全部池，与旧行为一致。
+    const scope = String(cfg.pool_slug || cfg.pool || '').trim();
+    const slot = { pool: scope || cfg.kind || '', count: 1, weight: 1, group, mode: cfg.mode };
     // 手填值：`pick` 是「池里的条目名」，`free` 是「用户自己写的任意 tag」。
     // 两者互斥，后端优先认 free（池里找不到东西也能出图）。
     if (cfg.mode === 'locked' && cfg.free) slot.free = cfg.free;
-    else if (cfg.mode === 'locked' && cfg.pick) slot.pick = cfg.pick;
+    else if (cfg.mode === 'locked' && cfg.pick) {
+      slot.pick = cfg.pick;
+      // 锁定值自带它的 tags：条目所在的池被禁用 / 条目被删 / 换了随机范围时，
+      // 后端用它兜底（「锁定」的承诺是这一抽不变，不该因为池没了就失效）。
+      if (cfg.tags) slot.pick_tags = cfg.tags;
+    }
     slots.push(slot);
   };
   // 意群自己的自由输入：pool 名带上意群标记，卡片明细里能看出这句话属于谁。

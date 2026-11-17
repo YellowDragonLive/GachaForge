@@ -168,14 +168,20 @@ export function asmPartHtml(cfg, { label, key, uid, scope = 'person', open, side
   const hand = mode === 'locked' && !c.pick && !!c.free;
   const val = mode === 'locked' ? (c.pick || c.free || '已锁定')
     : (mode === 'off' ? '关闭' : '随机');
+  // 「随机」不是从所有池乱摇：用户挑过池就是「在这个池里摇」，没挑过就是该部位
+  // 整类池。两种范围都得写出来——同一格今天摇「人物-动作」、明天摇动作类 61 个池，
+  // 用户无从判断。窄格放不下全名：省略 + title 给全名，不悄悄丢信息。
+  const pool = mode === 'random' ? (String(c.pool || '') || `${c.kind || '全部'}池`) : '';
+  const poolFull = mode === 'random' && !c.pool ? `${c.kind || '全部'}类的全部池` : pool;
   const attrs = scope === 'scene'
     ? `data-scope="scene" data-key="${key}"`
     : `data-scope="person" data-uid="${uid}" data-key="${key}"`;
   return `<button type="button" class="part m-${mode}${open ? ' open' : ''}${hand ? ' is-free' : ''}${side ? ' side-' + side : ''}"
     data-act="asm-open" ${attrs}
-    title="${esc(`${label}：${val}${hand ? '（手填）' : ''}`)}">
+    title="${esc(`${label}：${val}${pool ? `（范围：${poolFull}）` : ''}${hand ? '（手填）' : ''}`)}">
     <span class="part-k"><i class="stat-dot"></i>${esc(label)}</span>
-    <span class="part-v">${esc(mode === 'locked' ? cut(val, 20) : val)}</span>
+    <span class="part-v">${esc(mode === 'locked' ? cut(val, 20) : val)}${
+      pool ? `<i class="part-pool">${esc(cut(pool, 12))}</i>` : ''}</span>
   </button>`;
 }
 
@@ -317,7 +323,9 @@ export function asmPickerHtml(key) {
   const cfg = asmCurrentCfg();
   const ranked = rankPools(state.pools, kind, key);
   const picked = a.pickerPool;
-  const pickedPool = ranked.find((p) => p.name === picked);
+  // 选了池但在匹配池里找不到 = 冷存池（用户自己关掉的）。它不进 chip 行、也不参与抽卡，
+  // 必须在选择器里说清楚，否则「挑了池、锁了条目、抽卡却空」永远是个谜。
+  const cold = !!picked && !ranked.some((p) => p.name === picked);
   return `<div class="asm-picker">
     <div class="asm-picker-head"><i class="stat-dot"></i>${esc(label)} · 选条目或改状态
       <span class="asm-picker-kind">${kind ? `${ranked.length} 池匹配` : ''}</span>
@@ -337,6 +345,8 @@ export function asmPickerHtml(key) {
       title="输入池名片段，chip 行只留命中的池">
       <span class="hint" data-qf-count="asmPoolList"></span></div>
     <div class="asm-pools" id="asmPoolList">${poolChipsHtml(state.pools, kind, key, picked, 8, a.pickerPoolQ)}</div>
+    ${cold ? `<p class="hint asm-cold">「${esc(cut(picked, 22))}」是冷存池：能挑条目锁定，
+      但不参与随机抽卡（这一格的随机范围按整类算）</p>` : ''}
     <div class="asm-facets" id="asmFacetList">${asmFacetsHtml()}</div>
     <div class="row" style="margin-top:6px">
       <select class="asm-pool" data-act="asm-pool" title="全部 ${ranked.length} 池">${asmPoolOptionsHtml(ranked, picked)}</select>
@@ -434,11 +444,40 @@ export async function asmOpenPicker(scope, uid, key) {
   // chip 行顺序不动，只是落点变聪明——想换池一点就到。
   const best = ranked.find((p) => Number(p.item_count || 0) > 0 && Number(p.facet_groups || 0) > 0)
     || ranked.find((p) => Number(p.item_count || 0) > 0);
-  a.pickerPool = best ? String(best.name) : '';
+  // 上次在这一格挑过的池优先：默认池只是「没挑过」时的落点，不能反过来把用户
+  // 亲手选的池冲掉（关掉再打开就回到默认池 = 选了等于没选）。
+  const cfg = asmCurrentCfg() || {};
+  const remembered = String(cfg.pool || '');
+  const alive = remembered && (state.pools || []).some((p) => p && p.name === remembered);
+  a.pickerPool = alive ? remembered : (best ? String(best.name) : '');
+  // 明确挑过池 = 范围已锁定，搜索也不该跨池；首次打开（默认池）保持跨池搜索。
+  a.pickerLocked = !!alive;
   a.facetGroups = [];
   await asmLoadFacets();
   await refresh('draw');
   await asmLoadEntries();
+}
+
+/**
+ * 把「当前挑的池」写进这一格。以前池选择只活在全局 pickerPool 里，
+ * 关掉选择器就没了 —— 格子写着「随机」，实际范围却随上次浏览而变。
+ * pool 是给人看的名字，pool_slug 是给后端精确命中用的（中文名会被子串匹配带走）。
+ */
+export function asmSetSlotPool(name) {
+  const cfg = asmCurrentCfg();
+  if (!cfg) return;
+  const pool = String(name || '');
+  const hit = (state.pools || []).find((p) => p && p.name === pool);
+  // 冷存池（用户自己关掉的）不参与抽卡：写进随机范围等于挂一个抽不到的标签。
+  // 它仍然能浏览、能锁定条目——锁定的值自带 tags，不依赖池是否启用。
+  if (hit && hit.enabled === false) {
+    cfg.pool = '';
+    cfg.pool_slug = '';
+  } else {
+    cfg.pool = pool;
+    cfg.pool_slug = hit ? String(hit.slug || '') : '';
+  }
+  saveAssembly();
 }
 
 /** 点池 chip：只换池，不重建输入框，保留搜索词与焦点。 */
@@ -448,9 +487,10 @@ export async function asmPickPool(name) {
   a.pickerPool = String(name || '');
   // 手动点过 chip = 明确要看这一池，搜索也不再跨池；点「全部」则解锁恢复跨池
   a.pickerLocked = !!a.pickerPool;
+  asmSetSlotPool(a.pickerPool);   // 记住这一格的范围，重开选择器 / 出图都按它
   a.facetGroups = [];             // 换池先清空，否则会闪一下上一池的切片
   await asmLoadFacets();
-  await refresh('draw');          // chip 高亮与下拉选中值都要跟着变
+  await refresh('draw');          // chip 高亮、下拉选中值、格子上的池名都要跟着变
   await asmLoadEntries();
 }
 
@@ -581,11 +621,14 @@ export function asmSearchNow(t) {
 }
 
 /** 下拉选池与点 chip 同一语义：明确选了池就锁住，选「全部」解锁恢复跨池。 */
-export function asmPoolChange(t) {
+export async function asmPoolChange(t) {
   const a = state.assembly;
   a.pickerPool = t.value;
   a.pickerLocked = !!t.value;
-  refreshAsmPools();
+  asmSetSlotPool(a.pickerPool);   // 与 chip 一致：范围记到格子上，不只是这一次浏览
+  a.facetGroups = [];             // 换池先清空，否则会闪一下上一池的切片
+  await refresh('draw');          // 下拉选中值、chip 高亮、格子上的池名一起对齐
+  await asmLoadFacets();
   asmLoadEntries();
 }
 
